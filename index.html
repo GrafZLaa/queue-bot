@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<title>Журнал очереди</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+/* ── Tokens ── */
+:root[data-theme="light"] {
+  --bg:        #f5f7fa;
+  --surface:   #ffffff;
+  --surface2:  #f0f2f5;
+  --border:    #e2e6ed;
+  --text:      #1a1d23;
+  --subtext:   #6b7280;
+  --accent:    #2563eb;
+  --accent-bg: #eff6ff;
+  --green:     #16a34a;
+  --green-bg:  #f0fdf4;
+  --yellow:    #d97706;
+  --yellow-bg: #fffbeb;
+  --red:       #dc2626;
+  --red-bg:    #fef2f2;
+  --shadow:    0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06);
+  --shadow-md: 0 4px 6px rgba(0,0,0,.07), 0 2px 4px rgba(0,0,0,.06);
+}
+:root[data-theme="dark"] {
+  --bg:        #0f1117;
+  --surface:   #1a1d27;
+  --surface2:  #252836;
+  --border:    #2e3347;
+  --text:      #f1f3f9;
+  --subtext:   #8b92a5;
+  --accent:    #3b82f6;
+  --accent-bg: #1e2a3d;
+  --green:     #22c55e;
+  --green-bg:  #162419;
+  --yellow:    #f59e0b;
+  --yellow-bg: #1f1b10;
+  --red:       #ef4444;
+  --red-bg:    #1f1212;
+  --shadow:    0 1px 3px rgba(0,0,0,.3);
+  --shadow-md: 0 4px 6px rgba(0,0,0,.4);
+}
+
+/* ── Reset ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 16px; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+  min-height: 100dvh;
+  padding-bottom: env(safe-area-inset-bottom);
+  transition: background .2s, color .2s;
+}
+
+/* ── Layout ── */
+.app { max-width: 480px; margin: 0 auto; }
+
+/* ── Header ── */
+.header {
+  position: sticky; top: 0; z-index: 50;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 16px 10px;
+  display: flex; align-items: center; gap: 8px;
+}
+.header-title { flex: 1; }
+.header-title h1 { font-size: 17px; font-weight: 700; letter-spacing: -.3px; }
+.header-title p  { font-size: 12px; color: var(--subtext); margin-top: 1px; }
+
+.theme-btn {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px;
+  transition: background .15s;
+}
+.theme-btn:active { background: var(--border); }
+
+/* ── Week nav ── */
+.week-nav {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 8px 16px;
+}
+.week-nav-top {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px;
+}
+.week-label { font-size: 14px; font-weight: 600; }
+.nav-btn {
+  width: 30px; height: 30px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; color: var(--text);
+  transition: background .15s;
+}
+.nav-btn:active { background: var(--border); }
+
+.days-row {
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px;
+}
+.day-cell {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 4px 2px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background .15s;
+  user-select: none;
+}
+.day-cell:active { background: var(--surface2); }
+.day-cell.active {
+  background: var(--accent);
+}
+.day-cell.active .day-name,
+.day-cell.active .day-num { color: #fff !important; }
+.day-cell.active .day-dot { background: rgba(255,255,255,.7) !important; }
+.day-cell.today .day-num {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-radius: 50%;
+  width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+}
+.day-cell.active.today .day-num { background: rgba(255,255,255,.25); color: #fff; }
+
+.day-name { font-size: 11px; font-weight: 500; color: var(--subtext); }
+.day-num  { font-size: 15px; font-weight: 600; width: 26px; height: 26px;
+            display: flex; align-items: center; justify-content: center; }
+.day-dots { display: flex; gap: 2px; min-height: 6px; }
+.day-dot  { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+
+/* ── Date pill ── */
+.date-pill {
+  margin: 12px 16px;
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 6px 12px;
+  font-size: 13px; font-weight: 500;
+  box-shadow: var(--shadow);
+}
+
+/* ── Classes list ── */
+.classes { padding: 0 16px 80px; display: flex; flex-direction: column; gap: 10px; }
+
+.class-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  transition: box-shadow .15s, transform .1s;
+  -webkit-tap-highlight-color: transparent;
+}
+.class-card:active { transform: scale(.985); box-shadow: none; }
+
+.class-card-top {
+  display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px;
+}
+.time-badge {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12px; font-weight: 600;
+  white-space: nowrap; flex-shrink: 0;
+}
+.type-badge {
+  background: var(--surface2);
+  color: var(--subtext);
+  border-radius: 6px;
+  padding: 3px 7px;
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+}
+.room-badge {
+  margin-left: auto;
+  font-size: 12px; font-weight: 600;
+  color: var(--subtext);
+}
+.class-name {
+  font-size: 15px; font-weight: 600;
+  line-height: 1.3; margin-bottom: 6px;
+}
+.class-meta {
+  display: flex; align-items: center; justify-content: space-between;
+}
+.teacher-name {
+  font-size: 12px; color: var(--subtext);
+  display: flex; align-items: center; gap: 4px;
+}
+.queue-pill {
+  display: flex; align-items: center; gap: 4px;
+  border-radius: 20px;
+  padding: 3px 9px;
+  font-size: 12px; font-weight: 600;
+}
+.queue-pill.open    { background: var(--green-bg);  color: var(--green); }
+.queue-pill.pending { background: var(--surface2);  color: var(--subtext); }
+.queue-pill.closed  { background: var(--red-bg);    color: var(--red); }
+.queue-pill.completed { background: var(--surface2); color: var(--subtext); }
+
+/* ── Empty ── */
+.empty {
+  text-align: center; padding: 60px 20px;
+  color: var(--subtext);
+}
+.empty-icon { font-size: 48px; margin-bottom: 12px; }
+.empty p { font-size: 14px; }
+
+/* ── Modal overlay ── */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(0,0,0,.5);
+  display: flex; align-items: flex-end;
+  opacity: 0; pointer-events: none;
+  transition: opacity .25s;
+}
+.modal-overlay.visible { opacity: 1; pointer-events: all; }
+
+.modal {
+  background: var(--surface);
+  border-radius: 20px 20px 0 0;
+  width: 100%;
+  max-height: 90dvh;
+  overflow-y: auto;
+  padding: 0 0 env(safe-area-inset-bottom);
+  transform: translateY(100%);
+  transition: transform .3s cubic-bezier(.32,0,.67,0);
+}
+.modal-overlay.visible .modal { transform: translateY(0); }
+
+.modal-handle {
+  width: 36px; height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  margin: 10px auto 0;
+}
+.modal-header {
+  padding: 12px 16px 0;
+  display: flex; align-items: flex-start; justify-content: space-between;
+}
+.modal-close {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: var(--surface2);
+  border: none; cursor: pointer;
+  font-size: 14px; color: var(--subtext);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.modal-body { padding: 12px 16px 20px; }
+
+/* ── Modal class detail ── */
+.modal-subject { font-size: 19px; font-weight: 700; line-height: 1.3; margin-bottom: 4px; }
+.modal-teacher { font-size: 13px; color: var(--subtext); margin-bottom: 14px; }
+
+.info-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px;
+  background: var(--surface2);
+  border-radius: 10px;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+.info-row .label { color: var(--subtext); font-size: 12px; }
+.info-row .val   { font-weight: 600; margin-left: auto; }
+
+/* ── Assignments ── */
+.section-title {
+  font-size: 12px; font-weight: 600;
+  color: var(--subtext); text-transform: uppercase;
+  letter-spacing: .6px; margin: 16px 0 8px;
+}
+
+.asgn-card {
+  background: var(--surface2);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.asgn-title { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+.asgn-desc  { font-size: 12px; color: var(--subtext); margin-bottom: 4px; }
+.asgn-dl    { font-size: 11px; font-weight: 600; color: var(--red); }
+.asgn-link  {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-top: 6px;
+  color: var(--accent);
+  font-size: 12px; font-weight: 600;
+  text-decoration: none;
+}
+
+/* ── Queue section ── */
+.queue-status-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  margin-bottom: 12px;
+  font-size: 13px; font-weight: 600;
+}
+.queue-status-bar.open     { background: var(--green-bg);  color: var(--green); }
+.queue-status-bar.pending  { background: var(--surface2);  color: var(--subtext); }
+.queue-status-bar.closed   { background: var(--red-bg);    color: var(--red); }
+.queue-status-bar.completed{ background: var(--surface2);  color: var(--subtext); }
+.q-count { margin-left: auto; opacity: .7; font-weight: 400; }
+
+/* ── Queue entries ── */
+.q-entry {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.q-entry:last-child { border-bottom: none; }
+.q-pos {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--surface2);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; flex-shrink: 0;
+}
+.q-pos.good   { background: var(--green-bg);  color: var(--green); }
+.q-pos.middle { background: var(--yellow-bg); color: var(--yellow); }
+.q-pos.poor   { background: var(--red-bg);    color: var(--red); }
+.q-name  { font-size: 14px; font-weight: 500; }
+.q-cat   { font-size: 11px; color: var(--subtext); }
+.q-sub   { margin-left: auto; font-size: 13px; }
+
+/* ── Action button ── */
+.action-btn {
+  width: 100%; padding: 15px;
+  border-radius: 14px; border: none;
+  font-size: 16px; font-weight: 700;
+  cursor: pointer;
+  transition: opacity .15s, transform .1s;
+  margin-top: 14px;
+}
+.action-btn:active    { transform: scale(.97); }
+.action-btn:disabled  { opacity: .5; cursor: not-allowed; }
+.action-btn.join  { background: var(--accent); color: #fff; }
+.action-btn.leave { background: var(--red);    color: #fff; }
+.action-btn.disabled-look { background: var(--surface2); color: var(--subtext); }
+
+/* ── Loading spinner ── */
+.spinner-wrap {
+  display: flex; align-items: center; justify-content: center;
+  padding: 60px 0; color: var(--subtext);
+}
+.spinner {
+  width: 28px; height: 28px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Toast ── */
+#toast {
+  position: fixed; bottom: 80px; left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--text); color: var(--bg);
+  border-radius: 24px; padding: 10px 18px;
+  font-size: 13px; font-weight: 600;
+  white-space: nowrap; z-index: 200;
+  opacity: 0; transition: opacity .2s, transform .2s;
+  pointer-events: none;
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Header -->
+  <div class="header">
+    <div class="header-title">
+      <h1>📋 Журнал очереди</h1>
+      <p id="hdr-sub">Загрузка...</p>
+    </div>
+    <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">🌙</button>
+  </div>
+
+  <!-- Week nav -->
+  <div class="week-nav">
+    <div class="week-nav-top">
+      <button class="nav-btn" onclick="changeWeek(-1)">‹</button>
+      <span class="week-label" id="week-label">Март 2026</span>
+      <button class="nav-btn" onclick="changeWeek(1)">›</button>
+    </div>
+    <div class="days-row" id="days-row"></div>
+  </div>
+
+  <!-- Date pill -->
+  <div style="padding: 0 16px; margin-top: 12px; margin-bottom: 4px;">
+    <div class="date-pill">📅 <span id="date-label">сегодня</span></div>
+  </div>
+
+  <!-- Classes -->
+  <div class="classes" id="classes-list">
+    <div class="spinner-wrap"><div class="spinner"></div></div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
+  <div class="modal" id="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <div style="flex:1"></div>
+      <button class="modal-close" onclick="hideModal()">✕</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ── Telegram init ──────────────────────────────────────────────────────────
+const tg = window.Telegram?.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+const TG_USER = tg?.initDataUnsafe?.user;
+const ME = {
+  id:   TG_USER?.id || 0,
+  name: TG_USER ? `${TG_USER.first_name}${TG_USER.last_name ? ' '+TG_USER.last_name : ''}` : 'Гость',
+};
+
+// Apply Telegram theme if available
+if (tg?.colorScheme) {
+  document.documentElement.dataset.theme = tg.colorScheme;
+}
+
+// ── Theme ──────────────────────────────────────────────────────────────────
+function toggleTheme() {
+  const html = document.documentElement;
+  const next = html.dataset.theme === 'light' ? 'dark' : 'light';
+  html.dataset.theme = next;
+  document.getElementById('theme-btn').textContent = next === 'dark' ? '☀️' : '🌙';
+  localStorage.setItem('theme', next);
+}
+const savedTheme = localStorage.getItem('theme');
+if (savedTheme && !tg?.colorScheme) {
+  document.documentElement.dataset.theme = savedTheme;
+  document.getElementById('theme-btn').textContent = savedTheme === 'dark' ? '☀️' : '🌙';
+}
+
+// ── Date helpers ───────────────────────────────────────────────────────────
+const DAY_SHORT = ['Вс','Пн','Вт','Ср','Чт','Пт','Сб'];
+const MONTH_RU  = ['Январь','Февраль','Март','Апрель','Май','Июнь',
+                   'Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+const MONTH_RU2 = ['января','февраля','марта','апреля','мая','июня',
+                   'июля','августа','сентября','октября','ноября','декабря'];
+
+function isoDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate()+n); return r; }
+function getMonday(d) {
+  const day = d.getDay(); // 0=Sun
+  const diff = day === 0 ? -6 : 1 - day;
+  return addDays(d, diff);
+}
+function weekNum(d) {
+  const jan1 = new Date(d.getFullYear(), 0, 1);
+  return Math.ceil((((d - jan1) / 86400000) + jan1.getDay() + 1) / 7);
+}
+
+// ── State ──────────────────────────────────────────────────────────────────
+let today       = new Date();
+let selectedDay = new Date(today);
+let weekStart   = getMonday(today);
+let scheduleCache = {};   // date → [{class data}]
+let currentQueue  = null; // queue data for open modal
+
+// ── API ───────────────────────────────────────────────────────────────────
+async function apiGet(path) {
+  const r = await fetch(path);
+  return r.json();
+}
+async function apiPost(path, body) {
+  const r = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return r.json();
+}
+
+async function getSchedule(date) {
+  if (scheduleCache[date]) return scheduleCache[date];
+  const d = await apiGet(`/api/schedule?date=${date}`);
+  scheduleCache[date] = d.classes || [];
+  return scheduleCache[date];
+}
+async function getQueueDetail(classId) {
+  return apiGet(`/api/queue/${classId}`);
+}
+async function joinQueue(classId) {
+  return apiPost(`/api/queue/${classId}/join`, { user_id: ME.id, name: ME.name });
+}
+async function leaveQueue(classId) {
+  return apiPost(`/api/queue/${classId}/leave`, { user_id: ME.id });
+}
+
+// ── Week render ───────────────────────────────────────────────────────────
+async function renderWeek() {
+  const label = `${MONTH_RU[weekStart.getMonth()]} ${weekStart.getFullYear()} — ${weekNum(weekStart)} неделя`;
+  document.getElementById('week-label').textContent = label;
+
+  const row = document.getElementById('days-row');
+  row.innerHTML = '';
+  const todayIso = isoDate(today);
+  const selIso   = isoDate(selectedDay);
+
+  for (let i = 0; i < 7; i++) {
+    const d   = addDays(weekStart, i);
+    const iso = isoDate(d);
+    const classes = await getSchedule(iso).catch(() => []);
+    const dotCount = Math.min(classes.length, 3);
+
+    const cell = document.createElement('div');
+    cell.className = 'day-cell' +
+      (iso === selIso ? ' active' : '') +
+      (iso === todayIso && iso !== selIso ? ' today' : '');
+    cell.innerHTML = `
+      <span class="day-name">${DAY_SHORT[d.getDay()]}</span>
+      <span class="day-num">${d.getDate()}</span>
+      <div class="day-dots">${'<div class="day-dot"></div>'.repeat(dotCount)}</div>`;
+    cell.onclick = () => selectDay(d);
+    row.appendChild(cell);
+  }
+}
+
+// ── Day select ────────────────────────────────────────────────────────────
+async function selectDay(d) {
+  selectedDay = new Date(d);
+  scheduleCache = {};    // invalidate cache
+  await renderWeek();
+  await renderClasses();
+}
+
+function changeWeek(dir) {
+  weekStart = addDays(weekStart, dir * 7);
+  selectedDay = new Date(weekStart);
+  renderWeek();
+  renderClasses();
+}
+
+// ── Classes render ────────────────────────────────────────────────────────
+async function renderClasses() {
+  const container = document.getElementById('classes-list');
+  container.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+
+  const iso     = isoDate(selectedDay);
+  const dayStr  = `${selectedDay.getDate()} ${MONTH_RU2[selectedDay.getMonth()]} ${selectedDay.getFullYear()}`;
+  document.getElementById('date-label').textContent =
+    iso === isoDate(today) ? `сегодня — ${dayStr}` : dayStr;
+  document.getElementById('hdr-sub').textContent =
+    `${MONTH_RU[selectedDay.getMonth()]} ${selectedDay.getFullYear()}`;
+
+  const classes = await getSchedule(iso).catch(() => []);
+  container.innerHTML = '';
+
+  if (classes.length === 0) {
+    container.innerHTML = `
+      <div class="empty">
+        <div class="empty-icon">📭</div>
+        <p>Занятий нет</p>
+      </div>`;
+    return;
+  }
+
+  for (const cls of classes) {
+    const qStatus = cls.queue_status || 'pending';
+    const qLabel  = { pending:'⏳ Открытие скоро', open:'🟢 Запись открыта',
+                      closed:'🔴 Очередь закрыта', completed:'✅ Завершено' }[qStatus] || '';
+    const qCount  = cls.queue_count ?? 0;
+
+    const card = document.createElement('div');
+    card.className = 'class-card';
+    card.innerHTML = `
+      <div class="class-card-top">
+        <span class="time-badge">${cls.time_start} – ${cls.time_end}</span>
+        <span class="type-badge">${cls.type || 'ПР'}</span>
+        <span class="room-badge">${cls.room || ''}</span>
+      </div>
+      <div class="class-name">${cls.subject_name}</div>
+      <div class="class-meta">
+        <span class="teacher-name">👨‍🏫 ${cls.teacher || '—'}</span>
+        <span class="queue-pill ${qStatus}">
+          ${qLabel}${qCount > 0 ? ` · ${qCount}` : ''}
+        </span>
+      </div>`;
+    card.onclick = () => openClassModal(cls.id);
+    container.appendChild(card);
+  }
+}
+
+// ── Modal ─────────────────────────────────────────────────────────────────
+async function openClassModal(classId) {
+  const overlay = document.getElementById('modal-overlay');
+  const body    = document.getElementById('modal-body');
+  overlay.classList.add('visible');
+  body.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
+
+  const data = await getQueueDetail(classId).catch(() => null);
+  if (!data) { body.innerHTML = '<p style="color:var(--red)">Ошибка загрузки</p>'; return; }
+
+  currentQueue = data;
+  renderModal(data);
+}
+
+function renderModal(data) {
+  const body    = document.getElementById('modal-body');
+  const qStatus = data.queue?.status || 'pending';
+  const entries = data.queue?.entries || [];
+  const inQueue = entries.some(e => e.telegram_id === ME.id);
+  const myEntry = entries.find(e => e.telegram_id === ME.id);
+
+  // Assignments
+  let asgnsHtml = '';
+  if (data.assignments?.length) {
+    asgnsHtml = `<div class="section-title">📝 Задания</div>`;
+    for (const a of data.assignments) {
+      const dl  = a.deadline ? `<div class="asgn-dl">⏰ Дедлайн: ${fmtDt(a.deadline)}</div>` : '';
+      const url = a.url ? `<a class="asgn-link" href="${a.url}" target="_blank">🔗 Открыть задание</a>` : '';
+      asgnsHtml += `
+        <div class="asgn-card">
+          <div class="asgn-title">${a.title}</div>
+          ${a.description ? `<div class="asgn-desc">${a.description}</div>` : ''}
+          ${dl}${url}
+        </div>`;
+    }
+  }
+
+  // Queue entries
+  let qEntriesHtml = '';
+  if (entries.length) {
+    qEntriesHtml = entries.map(e => {
+      const pos  = e.position ?? '—';
+      const cat  = e.q_category || 'middle';
+      const sub  = e.submitted ? (e.on_time ? '✅' : '⏰') : '—';
+      const isMe = e.telegram_id === ME.id;
+      return `
+        <div class="q-entry">
+          <div class="q-pos ${cat}">${pos}</div>
+          <div>
+            <div class="q-name">${e.full_name}${isMe ? ' <span style="color:var(--accent);font-size:11px;">● вы</span>' : ''}</div>
+            <div class="q-cat">${catLabel(cat)}</div>
+          </div>
+          <div class="q-sub">${sub}</div>
+        </div>`;
+    }).join('');
+  }
+
+  const qStatusLabels = {
+    pending:   '⏳ Запись ещё не открыта',
+    open:      '🟢 Запись открыта!',
+    closed:    '🔴 Очередь сформирована',
+    completed: '✅ Пара завершена',
+  };
+
+  // Action button
+  let btnHtml = '';
+  if (qStatus === 'open') {
+    if (inQueue) {
+      btnHtml = `<button class="action-btn leave" onclick="doLeave(${data.class_id})">❌ Выйти из очереди</button>`;
+    } else {
+      btnHtml = `<button class="action-btn join" onclick="doJoin(${data.class_id})">✅ Записаться в очередь</button>`;
+    }
+  } else {
+    btnHtml = `<button class="action-btn disabled-look" disabled>${qStatusLabels[qStatus]}</button>`;
+  }
+
+  // My position hint
+  let myPosHtml = '';
+  if (myEntry && myEntry.position) {
+    myPosHtml = `<div style="text-align:center;font-size:12px;color:var(--subtext);margin-top:8px;">
+      Ваша позиция: <strong>#${myEntry.position}</strong> · ${catLabel(myEntry.q_category || 'middle')}
+    </div>`;
+  }
+
+  body.innerHTML = `
+    <div class="modal-subject">${data.subject_name}</div>
+    <div class="modal-teacher">👨‍🏫 ${data.teacher || '—'}</div>
+
+    <div class="info-row">🕐 Время <span class="val">${data.time_start} – ${data.time_end}</span></div>
+    <div class="info-row">🚪 Аудитория <span class="val">${data.room || '—'}</span></div>
+
+    ${asgnsHtml}
+
+    <div class="section-title">🎫 Очередь</div>
+    <div class="queue-status-bar ${qStatus}">
+      ${qStatusLabels[qStatus]}
+      ${entries.length ? `<span class="q-count">${entries.length} чел.</span>` : ''}
+    </div>
+    ${qEntriesHtml}
+    ${btnHtml}
+    ${myPosHtml}
+  `;
+}
+
+async function doJoin(classId) {
+  const btn = document.querySelector('.action-btn');
+  if (btn) btn.disabled = true;
+  const r = await joinQueue(classId).catch(() => null);
+  if (r?.status === 'ok') {
+    showToast('✅ Вы записаны в очередь!');
+    scheduleCache = {};
+    const data = await getQueueDetail(classId);
+    currentQueue = data;
+    renderModal(data);
+    renderClasses();
+  } else {
+    showToast(r?.error || '⚠️ Ошибка');
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function doLeave(classId) {
+  const btn = document.querySelector('.action-btn');
+  if (btn) btn.disabled = true;
+  const r = await leaveQueue(classId).catch(() => null);
+  if (r?.status === 'ok') {
+    showToast('Вы вышли из очереди');
+    scheduleCache = {};
+    const data = await getQueueDetail(classId);
+    currentQueue = data;
+    renderModal(data);
+    renderClasses();
+  } else {
+    showToast('⚠️ Ошибка');
+    if (btn) btn.disabled = false;
+  }
+}
+
+function hideModal() {
+  document.getElementById('modal-overlay').classList.remove('visible');
+}
+function closeModal(e) {
+  if (e.target === document.getElementById('modal-overlay')) hideModal();
+}
+
+// ── Utils ─────────────────────────────────────────────────────────────────
+function catLabel(cat) {
+  return { good:'🟢 Добросовестный', middle:'🟡 Средний', poor:'🔴 Отстающий' }[cat] || cat;
+}
+function fmtDt(s) {
+  try {
+    const d = new Date(s);
+    return `${d.getDate().toString().padStart(2,'0')}.${(d.getMonth()+1).toString().padStart(2,'0')}.${d.getFullYear()} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+  } catch { return s; }
+}
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────
+(async () => {
+  await renderWeek();
+  await renderClasses();
+  setInterval(() => { scheduleCache = {}; renderClasses(); }, 15000);
+})();
+</script>
+</body>
+</html>
