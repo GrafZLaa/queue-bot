@@ -1,6 +1,9 @@
 [build]
 builder = "nixpacks"
 
+[build.nixpacks]
+env = { PYTHON_VERSION = "3.13" }
+
 [deploy]
 startCommand = "python main.py"
 restartPolicyType = "on_failure"

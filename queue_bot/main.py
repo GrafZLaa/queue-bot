@@ -17,7 +17,7 @@ from aiogram.types import (
 from aiohttp import web
 from dotenv import load_dotenv
 
-import database as db
+from . import database as db
 
 load_dotenv()
 
@@ -67,10 +67,26 @@ def parse_dt(text: str) -> Optional[str]:
     return None
 
 def fmt_dt(s: str) -> str:
-    try: return datetime.fromisoformat(s).strftime("%d.%m.%Y %H:%M")
-    except: return s
+    """
+    Преобразует ISO-строку в читаемый формат.
+    
+    Args:
+        s: ISO-строка даты (например, "2025-03-26T14:30:00")
+    
+    Returns:
+        Строка в формате "ДД.ММ.ГГГГ ЧЧ:ММ"
+    
+    Example:
+        >>> fmt_dt("2025-03-26T14:30:00")
+        '26.03.2025 14:30'
+    """
+    try:
+        return datetime.fromisoformat(s).strftime("%d.%m.%Y %H:%M")
+    except: 
+        return s
 
 def fmt_user(u: dict) -> str:
+    """Форматирует информацию о пользователе для отображения в Telegram"""
     cat = CAT_EMOJI[u["category"]] + " " + CAT_LABEL[u["category"]]
     return (
         f"👤 *{u['full_name']}*\n"
