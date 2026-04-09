@@ -32,8 +32,13 @@ log = logging.getLogger(__name__)
 bot = Bot(token=TOKEN)
 dp  = Dispatcher(storage=MemoryStorage())
 
+
 # ── FSM ───────────────────────────────────────────────────────────────────────
 class Form(StatesGroup):
+    """
+    Группа состояний (FSM) для пошагового ввода данных пользователем:
+    создание предметов, пар, заданий, регистрация и редактирование профиля.
+    """
     subj_name   = State()
     subj_group  = State()
     cls_dt      = State()
@@ -47,14 +52,26 @@ class Form(StatesGroup):
     edit_name   = State()
     register    = State()
 
+
 CAT_EMOJI  = {"good": "🟢", "middle": "🟡", "poor": "🔴"}
 CAT_LABEL  = {"good": "Добросовестный", "middle": "Средний", "poor": "Отстающий"}
 STAT_EMOJI = {"pending": "⏳", "open": "🟢", "closed": "🔴", "completed": "✅"}
 
+
 def kb(*rows): return InlineKeyboardMarkup(inline_keyboard=list(rows))
 def btn(text, data): return InlineKeyboardButton(text=text, callback_data=data)
 
+
 def parse_dt(text: str) -> Optional[str]:
+    """
+    Пытается распарсить строку даты в формат ISO.
+    
+    Args:
+        text: Строка с датой (например, "26.03.2025 14:30").
+    
+    Returns:
+        ISO-строку даты или None, если формат не распознан.
+    """
     fmts = ["%d.%m.%Y %H:%M", "%d.%m %H:%M", "%Y-%m-%d %H:%M"]
     for f in fmts:
         try:
@@ -65,6 +82,7 @@ def parse_dt(text: str) -> Optional[str]:
         except ValueError:
             continue
     return None
+
 
 def fmt_dt(s: str) -> str:
     """
@@ -85,6 +103,7 @@ def fmt_dt(s: str) -> str:
     except: 
         return s
 
+
 def fmt_user(u: dict) -> str:
     """Форматирует информацию о пользователе для отображения в Telegram"""
     cat = CAT_EMOJI[u["category"]] + " " + CAT_LABEL[u["category"]]
@@ -95,7 +114,14 @@ def fmt_user(u: dict) -> str:
         f"✅ Вовремя: {u['on_time']}  ⏰ Поздно: {u['late']}  ❌ Не сдал: {u['no_show']}"
     )
 
+
 def main_menu_kb(tg_id: int):
+    """
+    Формирует главное меню (кнопки для веб-аппа, рейтинга и админки).
+    
+    Args:
+        tg_id: Telegram ID текущего пользователя.
+    """
     rows = [
         [InlineKeyboardButton(text="📅 Открыть расписание", web_app=WebAppInfo(url=WEB_URL))],
         [btn("📊 Мой рейтинг", "my_rating"), btn("🏆 Лидерборд", "leaderboard")],
@@ -104,9 +130,11 @@ def main_menu_kb(tg_id: int):
         rows.append([btn("⚙️ Админ-панель", "admin")])
     return kb(*rows)
 
+
 # ── /start ────────────────────────────────────────────────────────────────────
 @dp.message(Command("start"))
 async def cmd_start(msg: Message, state: FSMContext):
+    """Хэндлер команды /start: регистрация новых пользователей или вход."""
     u = msg.from_user
     existing = await db.get_user_by_tg(u.id)
     if not existing:
@@ -124,8 +152,10 @@ async def cmd_start(msg: Message, state: FSMContext):
             reply_markup=main_menu_kb(u.id), parse_mode="Markdown"
         )
 
+
 @dp.message(Form.register)
 async def fsm_register(msg: Message, state: FSMContext):
+    """Хэндлер процесса регистрации (запрос и сохранение ФИО)."""
     name = msg.text.strip()
     if len(name.split()) < 2:
         await msg.answer("❌ Введите Фамилию и Имя (минимум 2 слова):")
@@ -138,21 +168,27 @@ async def fsm_register(msg: Message, state: FSMContext):
         reply_markup=main_menu_kb(u.id), parse_mode="Markdown"
     )
 
+
 @dp.callback_query(F.data == "main_menu")
 async def cb_main(cq: CallbackQuery):
+    """Хэндлер возврата в главное меню."""
     await cq.answer()
     await cq.message.edit_text("👋 *Журнал очереди*",
         reply_markup=main_menu_kb(cq.from_user.id), parse_mode="Markdown")
 
+
 @dp.callback_query(F.data == "my_rating")
 async def cb_rating(cq: CallbackQuery):
+    """Хэндлер отображения рейтинга текущего пользователя."""
     await cq.answer()
     u = await db.get_user_by_tg(cq.from_user.id)
     await cq.message.edit_text(fmt_user(u) if u else "Напишите /start",
         reply_markup=kb([btn("◀️ Назад","main_menu")]), parse_mode="Markdown")
 
+
 @dp.callback_query(F.data == "leaderboard")
 async def cb_lb(cq: CallbackQuery):
+    """Хэндлер отображения топ-20 студентов по рейтингу."""
     await cq.answer()
     users = (await db.all_users())[:20]
     medals = {1:"🥇",2:"🥈",3:"🥉"}
@@ -162,11 +198,13 @@ async def cb_lb(cq: CallbackQuery):
     await cq.message.edit_text("\n".join(lines),
         reply_markup=kb([btn("◀️ Назад","main_menu")]), parse_mode="Markdown")
 
+
 # ── Admin ─────────────────────────────────────────────────────────────────────
 def is_admin(cq): return cq.from_user.id in ADMIN_IDS
 
 @dp.callback_query(F.data == "admin")
 async def cb_admin(cq: CallbackQuery):
+    """Хэндлер входа в админ-панель."""
     if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
     await cq.answer()
     await cq.message.edit_text("⚙️ *Админ-панель*", reply_markup=kb(
@@ -175,8 +213,10 @@ async def cb_admin(cq: CallbackQuery):
         [btn("◀️ Назад","main_menu")]
     ), parse_mode="Markdown")
 
+
 @dp.callback_query(F.data == "adm_subjects")
 async def cb_adm_subjects(cq: CallbackQuery):
+    """Хэндлер списка предметов в админке."""
     if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
     await cq.answer()
     subjects = await db.all_subjects()
@@ -187,34 +227,44 @@ async def cb_adm_subjects(cq: CallbackQuery):
     rows += [[btn("➕ Добавить предмет","adm_newsubj")],[btn("◀️ Назад","admin")]]
     await cq.message.edit_text("📚 *Предметы*", reply_markup=kb(*rows), parse_mode="Markdown")
 
+
 @dp.callback_query(F.data == "adm_newsubj")
 async def cb_adm_newsubj(cq: CallbackQuery, state: FSMContext):
+    """Хэндлер начала процесса добавления предмета."""
     if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
     await cq.answer(); await state.set_state(Form.subj_name)
     await cq.message.edit_text("📖 Название предмета:", reply_markup=kb([btn("❌ Отмена","adm_subjects")]))
 
+
 @dp.message(Form.subj_name)
 async def fsm_subj_name(msg: Message, state: FSMContext):
+    """Сохраняет имя предмета и запрашивает группу."""
     await state.update_data(name=msg.text.strip()); await state.set_state(Form.subj_group)
     await msg.answer("Группа (или `-`):")
 
+
 @dp.message(Form.subj_group)
 async def fsm_subj_group(msg: Message, state: FSMContext):
+    """Сохраняет группу и завершает создание предмета в БД."""
     d = await state.get_data()
     grp = msg.text.strip() if msg.text.strip()!="-" else None
     await db.add_subject(d["name"], grp); await state.clear()
     await msg.answer(f"✅ *{d['name']}* добавлен!",
         reply_markup=kb([btn("📚 Предметы","adm_subjects")]), parse_mode="Markdown")
 
+
 @dp.callback_query(F.data.startswith("adm_delsubj_"))
 async def cb_delsubj(cq: CallbackQuery):
+    """Удаляет предмет по его ID."""
     if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
     await db.delete_subject(int(cq.data.split("_")[2]))
     await cq.answer("Удалено!", show_alert=True)
     cq.data="adm_subjects"; await cb_adm_subjects(cq)
 
+
 @dp.callback_query(F.data.startswith("adm_subj_"))
 async def cb_adm_subj(cq: CallbackQuery):
+    """Отображает список занятий для выбранного предмета."""
     if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
     await cq.answer()
     sid = int(cq.data.split("_")[2])
@@ -229,8 +279,10 @@ async def cb_adm_subj(cq: CallbackQuery):
     rows += [[btn("➕ Добавить пару",f"adm_addcls_{sid}")],[btn("◀️ Назад","adm_subjects")]]
     await cq.message.edit_text(f"📖 *{subj['name']}*", reply_markup=kb(*rows), parse_mode="Markdown")
 
+
 @dp.callback_query(F.data.startswith("adm_clsd_"))
 async def cb_adm_clsd(cq: CallbackQuery):
+    """Отображает детали занятия, статус очереди и список заданий."""
     if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
     await cq.answer()
     cid = int(cq.data.split("_")[2])
@@ -253,67 +305,87 @@ async def cb_adm_clsd(cq: CallbackQuery):
            [btn("◀️ Назад",f"adm_subj_{cls['subject_id']}")]]
     await cq.message.edit_text("\n".join(lines),reply_markup=kb(*rows),parse_mode="Markdown")
 
+
 @dp.callback_query(F.data.startswith("adm_addcls_"))
 async def cb_addcls(cq: CallbackQuery, state: FSMContext):
+    """Начинает процесс добавления нового занятия."""
     if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
     await cq.answer(); sid=int(cq.data.split("_")[2])
     await state.update_data(subject_id=sid); await state.set_state(Form.cls_dt)
     await cq.message.edit_text("📅 Дата и время: `ДД.ММ.ГГГГ ЧЧ:ММ`",
         reply_markup=kb([btn("❌ Отмена",f"adm_subj_{sid}")]),parse_mode="Markdown")
 
+
 @dp.message(Form.cls_dt)
 async def fsm_cls_dt(msg: Message, state: FSMContext):
+    """Сохраняет время занятия и запрашивает аудиторию."""
     dt=parse_dt(msg.text)
     if not dt: await msg.answer("❌ Формат: `15.03.2025 10:00`",parse_mode="Markdown"); return
     await state.update_data(dt=dt); await state.set_state(Form.cls_room)
     await msg.answer("Аудитория (или `-`):")
 
+
 @dp.message(Form.cls_room)
 async def fsm_cls_room(msg: Message, state: FSMContext):
+    """Сохраняет аудиторию и запрашивает преподавателя."""
     await state.update_data(room=msg.text.strip() if msg.text.strip()!="-" else "")
     await state.set_state(Form.cls_teacher); await msg.answer("Преподаватель (или `-`):")
 
+
 @dp.message(Form.cls_teacher)
 async def fsm_cls_teacher(msg: Message, state: FSMContext):
+    """Сохраняет преподавателя и создает занятие в БД."""
     d=await state.get_data()
     teacher=msg.text.strip() if msg.text.strip()!="-" else ""
     await db.add_class(d["subject_id"],d["dt"],d["room"],teacher); await state.clear()
     await msg.answer("✅ Пара добавлена!",
         reply_markup=kb([btn("📖 К предмету",f"adm_subj_{d['subject_id']}")]),parse_mode="Markdown")
 
+
 @dp.callback_query(F.data.startswith("adm_delcls_"))
 async def cb_delcls(cq: CallbackQuery):
+    """Удаляет занятие."""
     if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
     cid=int(cq.data.split("_")[2]); cls=await db.get_class(cid); sid=cls["subject_id"] if cls else None
     await db.delete_class(cid); await cq.answer("Удалено!",show_alert=True)
     if sid: cq.data=f"adm_subj_{sid}"; await cb_adm_subj(cq)
 
+
 @dp.callback_query(F.data.startswith("adm_addasgn_"))
 async def cb_addasgn(cq: CallbackQuery, state: FSMContext):
+    """Начинает процесс добавления задания."""
     if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
     await cq.answer(); cid=int(cq.data.split("_")[2])
     await state.update_data(class_id=cid); await state.set_state(Form.asgn_title)
     await cq.message.edit_text("📝 Название задания:", reply_markup=kb([btn("❌ Отмена",f"adm_clsd_{cid}")]))
 
+
 @dp.message(Form.asgn_title)
 async def fsm_asgn_title(msg, state):
+    """Начинает процесс добавления задания."""
     await state.update_data(title=msg.text.strip()); await state.set_state(Form.asgn_desc)
     await msg.answer("Описание (или `-`):")
 
+
 @dp.message(Form.asgn_desc)
 async def fsm_asgn_desc(msg, state):
+    """Сохраняет описание и запрашивает дедлайн."""
     desc=msg.text.strip() if msg.text.strip()!="-" else None
     await state.update_data(description=desc); await state.set_state(Form.asgn_dl)
     await msg.answer("Дедлайн `ДД.ММ.ГГГГ ЧЧ:ММ` (или `-`):",parse_mode="Markdown")
 
+
 @dp.message(Form.asgn_dl)
 async def fsm_asgn_dl(msg, state):
+    """Сохраняет дедлайн и запрашивает ссылку."""
     t=msg.text.strip()
     await state.update_data(deadline=parse_dt(t) if t!="-" else None)
     await state.set_state(Form.asgn_url); await msg.answer("Ссылка на задание (или `-`):")
 
+
 @dp.message(Form.asgn_url)
 async def fsm_asgn_url(msg, state):
+    """Сохраняет ссылку и создает задание в БД."""
     d=await state.get_data(); url=msg.text.strip() if msg.text.strip()!="-" else None
     cls=await db.get_class(d["class_id"])
     await db.add_assignment(d["class_id"],cls["subject_id"],d["title"],
@@ -322,15 +394,19 @@ async def fsm_asgn_url(msg, state):
     await msg.answer(f"✅ *{d['title']}* добавлено!",
         reply_markup=kb([btn("К паре",f"adm_clsd_{d['class_id']}")]),parse_mode="Markdown")
 
+
 @dp.callback_query(F.data.startswith("adm_openq_"))
 async def cb_openq(cq: CallbackQuery):
+    """Открывает запись в очередь для студентов."""
     if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
     p=cq.data.split("_"); qid,cid=int(p[2]),int(p[3])
     await db.set_queue_status(qid,"open"); await cq.answer("✅ Открыта!",show_alert=True)
     cq.data=f"adm_clsd_{cid}"; await cb_adm_clsd(cq)
 
+
 @dp.callback_query(F.data.startswith("adm_closeq_"))
 async def cb_closeq(cq: CallbackQuery):
+    """Закрывает запись, рандомизирует очередь и уведомляет студентов."""
     if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
     p=cq.data.split("_"); qid,cid=int(p[2]),int(p[3])
     await db.randomize_queue(qid)
@@ -344,15 +420,19 @@ async def cb_closeq(cq: CallbackQuery):
     await cq.answer("🔀 Готово!",show_alert=True)
     cq.data=f"adm_clsd_{cid}"; await cb_adm_clsd(cq)
 
+
 @dp.callback_query(F.data.startswith("adm_carry_"))
 async def cb_carry(cq: CallbackQuery):
+    """Переносит несдавших студентов в следующую очередь."""
     if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
     p=cq.data.split("_"); qid,ncid=int(p[2]),int(p[3])
     await db.carry_queue(qid,ncid); await cq.answer("⏩ Перенесено!",show_alert=True)
     cq.data=f"adm_clsd_{ncid}"; await cb_adm_clsd(cq)
 
+
 @dp.callback_query(F.data.startswith("adm_mark_"))
 async def cb_mark(cq: CallbackQuery):
+    """Отображает пагинированный список студентов для выставления оценок."""
     if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
     await cq.answer()
     p=cq.data.split("_"); qid=int(p[2]); page=int(p[3]) if len(p)>3 else 0
@@ -374,8 +454,10 @@ async def cb_mark(cq: CallbackQuery):
         f"📋 *Сдачи* — стр. {page+1}/{max(1,(len(entries)-1)//PAGE+1)}",
         reply_markup=kb(*rows),parse_mode="Markdown")
 
+
 @dp.callback_query(F.data.startswith("adm_sub_"))
 async def cb_sub(cq: CallbackQuery):
+    """Фиксирует результат сдачи (вовремя, поздно, не сдал) для студента."""
     if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
     p=cq.data.split("_"); qid,uid,kind,page=int(p[2]),int(p[3]),p[4],int(p[5])
     await db.mark_submission(qid,uid,kind)
@@ -384,8 +466,10 @@ async def cb_sub(cq: CallbackQuery):
     await cq.answer(f"{label}. Рейтинг: {u['rating']}/100",show_alert=True)
     cq.data=f"adm_mark_{qid}_{page}"; await cb_mark(cq)
 
+
 @dp.callback_query(F.data == "adm_users")
 async def cb_adm_users(cq: CallbackQuery):
+    """Отображает список всех студентов для админа."""
     if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
     await cq.answer()
     users=await db.all_users()
@@ -393,8 +477,10 @@ async def cb_adm_users(cq: CallbackQuery):
     rows.append([btn("◀️ Назад","admin")])
     await cq.message.edit_text("👥 *Студенты*",reply_markup=kb(*rows),parse_mode="Markdown")
 
+
 @dp.callback_query(F.data.startswith("adm_user_"))
 async def cb_adm_user(cq: CallbackQuery):
+    """Отображает детали студента с опциями редактирования."""
     if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
     await cq.answer(); uid=int(cq.data.split("_")[2]); u=await db.get_user(uid)
     await cq.message.edit_text(fmt_user(u) if u else "?",
@@ -405,8 +491,10 @@ async def cb_adm_user(cq: CallbackQuery):
         ),
         parse_mode="Markdown")
 
+
 @dp.callback_query(F.data.startswith("adm_editname_"))
 async def cb_editname(cq: CallbackQuery, state: FSMContext):
+    """Начинает процесс изменения ФИО студента."""
     if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
     await cq.answer(); uid=int(cq.data.split("_")[2]); u=await db.get_user(uid)
     await state.update_data(edit_uid=uid); await state.set_state(Form.edit_name)
@@ -414,8 +502,10 @@ async def cb_editname(cq: CallbackQuery, state: FSMContext):
         f"✏️ Текущее ФИО: *{u['full_name']}*\n\nВведите новое ФИО:",
         reply_markup=kb([btn("❌ Отмена",f"adm_user_{uid}")]),parse_mode="Markdown")
 
+
 @dp.message(Form.edit_name)
 async def fsm_edit_name(msg, state):
+    """Сохраняет новое ФИО студента."""
     name = msg.text.strip()
     if len(name.split()) < 2:
         await msg.answer("❌ Минимум 2 слова (Фамилия Имя):"); return
@@ -424,16 +514,20 @@ async def fsm_edit_name(msg, state):
     await msg.answer(f"✅ ФИО изменено!\n\n{fmt_user(u)}",
         reply_markup=kb([btn("◀️",f"adm_user_{uid}")]),parse_mode="Markdown")
 
+
 @dp.callback_query(F.data.startswith("adm_editr_"))
 async def cb_editr(cq: CallbackQuery, state: FSMContext):
+    """Начинает процесс изменения рейтинга студента."""
     if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
     await cq.answer(); uid=int(cq.data.split("_")[2]); u=await db.get_user(uid)
     await state.update_data(edit_uid=uid); await state.set_state(Form.edit_rating)
     await cq.message.edit_text(f"Рейтинг *{u['full_name']}*: `{u['rating']}/100`\n\nНовый (0–100):",
         reply_markup=kb([btn("❌ Отмена",f"adm_user_{uid}")]),parse_mode="Markdown")
 
+
 @dp.message(Form.edit_rating)
 async def fsm_edit_rating(msg, state):
+    """Сохраняет новый рейтинг студента."""
     try:
         r=int(msg.text.strip()); d=await state.get_data(); uid=d["edit_uid"]
         await db.set_rating(uid,r); await state.clear(); u=await db.get_user(uid)
@@ -442,23 +536,30 @@ async def fsm_edit_rating(msg, state):
     except ValueError:
         await msg.answer("❌ Число от 0 до 100.")
 
+
 @dp.callback_query(F.data == "noop")
 async def cb_noop(cq): await cq.answer()
 
+
 # ── Web API ───────────────────────────────────────────────────────────────────
 def add_cors(resp):
+    """Добавляет CORS заголовки к HTTP ответу."""
     resp.headers["Access-Control-Allow-Origin"]  = "*"
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
     return resp
 
+
 async def serve_index(request):
+    """Возвращает статический файл index.html для WebApp."""
     try:
         with open("index.html","r",encoding="utf-8") as f:
             return web.Response(text=f.read(),content_type="text/html")
     except FileNotFoundError:
         return web.Response(text="index.html not found",status=404)
 
+
 async def api_schedule(request):
+    """API-эндпоинт для получения расписания на конкретную дату."""
     date_str=request.rel_url.query.get("date","")
     if not date_str: return web.json_response({"classes":[]})
     try: date_obj=datetime.strptime(date_str,"%Y-%m-%d").date()
@@ -483,7 +584,9 @@ async def api_schedule(request):
     result.sort(key=lambda x:x["time_start"])
     return add_cors(web.json_response({"classes":result}))
 
+
 async def api_queue_detail(request):
+    """API-эндпоинт для получения деталей очереди конкретного занятия."""
     cid=int(request.match_info["class_id"])
     cls=await db.get_class(cid)
     if not cls: return web.json_response({"error":"not found"},status=404)
@@ -512,7 +615,9 @@ async def api_queue_detail(request):
                         "deadline":a.get("deadline"),"url":a.get("url")} for a in asgns],
     }))
 
+
 async def api_join(request):
+    """API-эндпоинт для записи пользователя в очередь."""
     cid=int(request.match_info["class_id"]); data=await request.json()
     user=await db.get_user_by_tg(data.get("user_id",0))
     if not user: return web.json_response({"error":"Сначала напишите /start боту"},status=400)
@@ -524,7 +629,9 @@ async def api_join(request):
     await db.join_queue(queue["id"],user["id"])
     return add_cors(web.json_response({"status":"ok"}))
 
+
 async def api_leave(request):
+    """API-эндпоинт для выхода пользователя из очереди."""
     cid=int(request.match_info["class_id"]); data=await request.json()
     user=await db.get_user_by_tg(data.get("user_id",0))
     if not user: return web.json_response({"error":"not found"},status=400)
@@ -532,15 +639,19 @@ async def api_leave(request):
     if queue: await db.leave_queue(queue["id"],user["id"])
     return add_cors(web.json_response({"status":"ok"}))
 
+
 async def options_handler(request):
+    """Обработчик OPTIONS запросов для CORS."""
     resp=web.Response()
     resp.headers.update({"Access-Control-Allow-Origin":"*",
                           "Access-Control-Allow-Methods":"GET,POST,OPTIONS",
                           "Access-Control-Allow-Headers":"Content-Type"})
     return resp
 
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 async def main():
+    """Точка входа: инициализация БД, запуск Web-сервера и бота."""
     await db.init()
     app=web.Application()
     app.router.add_get("/",serve_index)
@@ -554,6 +665,7 @@ async def main():
     log.info(f"Server running on port {PORT}")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
+
 
 if __name__=="__main__":
     if sys.platform=="win32":
