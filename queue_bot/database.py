@@ -59,20 +59,46 @@ CREATE TABLE IF NOT EXISTS entries (
 );
 """
 
+
 def category(rating: int) -> str:
+    """
+    Определяет категорию пользователя на основе его рейтинга.
+
+    Args:
+        rating: Целочисленное значение рейтинга (0-100).
+
+    Returns:
+        Строка-категория: "good" (>=65), "poor" (<=35) или "middle" (в остальных случаях).
+    """
     if rating >= 65: return "good"
     if rating <= 35: return "poor"
     return "middle"
 
+
 async def init():
+    """
+    Инициализирует базу данных: создает необходимые таблицы, если они еще не существуют.
+    """
     async with aiosqlite.connect(DB) as db:
         db.row_factory = aiosqlite.Row
         await db.executescript(SCHEMA)
         await db.commit()
 
+
 # ── Users ────────────────────────────────────────────────────────────────────
 
 async def ensure_user(tg_id: int, username: Optional[str], full_name: str) -> dict:
+    """
+    Создает пользователя в базе или обновляет данные существующего, если он уже есть.
+
+    Args:
+        tg_id: Telegram ID пользователя.
+        username: Юзернейм пользователя.
+        full_name: Полное имя пользователя.
+
+    Returns:
+        Словарь с данными пользователя из базы.
+    """
     async with aiosqlite.connect(DB) as db:
         db.row_factory = aiosqlite.Row
         await db.execute(
@@ -87,27 +113,64 @@ async def ensure_user(tg_id: int, username: Optional[str], full_name: str) -> di
         cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (tg_id,))
         return dict(await cur.fetchone())
 
+
 async def get_user_by_tg(tg_id: int) -> Optional[dict]:
+    """
+    Получает данные пользователя по его Telegram ID.
+
+    Args:
+        tg_id: Telegram ID пользователя.
+
+    Returns:
+        Словарь с данными пользователя или None, если пользователь не найден.
+    """
     async with aiosqlite.connect(DB) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (tg_id,))
         row = await cur.fetchone()
         return dict(row) if row else None
 
+
 async def get_user(user_id: int) -> Optional[dict]:
+    """
+    Получает данные пользователя по внутреннему ID в базе.
+
+    Args:
+        user_id: ID пользователя в базе данных.
+
+    Returns:
+        Словарь с данными пользователя или None, если пользователь не найден.
+    """
     async with aiosqlite.connect(DB) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM users WHERE id=?", (user_id,))
         row = await cur.fetchone()
         return dict(row) if row else None
 
+
 async def all_users() -> list:
+    """
+    Получает список всех пользователей, отсортированных по рейтингу в порядке убывания.
+
+    Returns:
+        Список словарей с данными пользователей.
+    """
+
     async with aiosqlite.connect(DB) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM users ORDER BY rating DESC")
         return [dict(r) for r in await cur.fetchall()]
 
+
 async def set_rating(user_id: int, rating: int):
+    """
+    Принудительно устанавливает рейтинг пользователя.
+
+    Args:
+        user_id: ID пользователя в базе данных.
+        rating: Значение рейтинга (будет приведено к диапазону 0-100).
+    """
+
     r = max(0, min(100, rating))
     async with aiosqlite.connect(DB) as db:
         await db.execute(
@@ -116,7 +179,15 @@ async def set_rating(user_id: int, rating: int):
         )
         await db.commit()
 
+
 async def set_full_name(user_id: int, full_name: str):
+    """
+    Обновляет полное имя пользователя.
+
+    Args:
+        user_id: ID пользователя в базе данных.
+        full_name: Новое полное имя.
+    """
     async with aiosqlite.connect(DB) as db:
         await db.execute(
             "UPDATE users SET full_name=? WHERE id=?",
@@ -124,7 +195,15 @@ async def set_full_name(user_id: int, full_name: str):
         )
         await db.commit()
 
+
 async def apply_rating(user_id: int, kind: str):
+    """
+    Корректирует рейтинг и статистику посещаемости пользователя по завершении занятия.
+
+    Args:
+        user_id: ID пользователя в базе данных.
+        kind: Тип события ("on_time", "late", "no_show").
+    """
     delta = {"on_time": 10, "late": 2, "no_show": -10}[kind]
     u = await get_user(user_id)
     if not u: return
@@ -139,22 +218,50 @@ async def apply_rating(user_id: int, kind: str):
         )
         await db.commit()
 
+
 # ── Subjects ─────────────────────────────────────────────────────────────────
 
 async def all_subjects() -> list:
+    """
+    Возвращает список всех предметов, отсортированных по названию.
+
+    Returns:
+        Список словарей предметов.
+    """
     async with aiosqlite.connect(DB) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM subjects ORDER BY name")
         return [dict(r) for r in await cur.fetchall()]
 
+
 async def get_subject(sid: int) -> Optional[dict]:
+    """
+    Получает данные о предмете по его ID.
+
+    Args:
+        sid: ID предмета.
+
+    Returns:
+        Словарь с данными предмета или None.
+    """
     async with aiosqlite.connect(DB) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM subjects WHERE id=?", (sid,))
         row = await cur.fetchone()
         return dict(row) if row else None
 
+
 async def add_subject(name: str, group_name: Optional[str]) -> int:
+    """
+    Добавляет новый предмет в базу данных.
+
+    Args:
+        name: Название предмета.
+        group_name: Название группы или потока.
+
+    Returns:
+        ID созданного предмета.
+    """
     async with aiosqlite.connect(DB) as db:
         cur = await db.execute(
             "INSERT INTO subjects (name, group_name) VALUES (?,?)", (name, group_name)
@@ -162,14 +269,31 @@ async def add_subject(name: str, group_name: Optional[str]) -> int:
         await db.commit()
         return cur.lastrowid
 
+
 async def delete_subject(sid: int):
+    """
+    Удаляет предмет и все связанные с ним классы и задания (каскадно).
+
+    Args:
+        sid: ID предмета.
+    """
     async with aiosqlite.connect(DB) as db:
         await db.execute("DELETE FROM subjects WHERE id=?", (sid,))
         await db.commit()
 
+
 # ── Classes ───────────────────────────────────────────────────────────────────
 
 async def classes_for_subject(sid: int) -> list:
+    """
+    Возвращает список занятий для указанного предмета, отсортированных по дате.
+
+    Args:
+        sid: ID предмета.
+
+    Returns:
+        Список занятий.
+    """
     async with aiosqlite.connect(DB) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
@@ -177,7 +301,17 @@ async def classes_for_subject(sid: int) -> list:
         )
         return [dict(r) for r in await cur.fetchall()]
 
+
 async def get_class(cid: int) -> Optional[dict]:
+    """
+    Получает расширенную информацию о занятии (включая название предмета).
+
+    Args:
+        cid: ID занятия.
+
+    Returns:
+        Словарь с данными занятия или None.
+    """
     async with aiosqlite.connect(DB) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
@@ -187,7 +321,20 @@ async def get_class(cid: int) -> Optional[dict]:
         row = await cur.fetchone()
         return dict(row) if row else None
 
+
 async def add_class(subject_id: int, dt: str, room: str, teacher: str) -> int:
+    """
+    Добавляет занятие и создает для него пустую очередь.
+
+    Args:
+        subject_id: ID предмета.
+        dt: Дата и время занятия в формате ISO.
+        room: Номер аудитории.
+        teacher: Имя преподавателя.
+
+    Returns:
+        ID созданного занятия.
+    """
     async with aiosqlite.connect(DB) as db:
         cur = await db.execute(
             "INSERT INTO classes (subject_id,dt,room,teacher) VALUES (?,?,?,?)",
@@ -198,14 +345,32 @@ async def add_class(subject_id: int, dt: str, room: str, teacher: str) -> int:
         await db.commit()
         return cid
 
+
 async def delete_class(cid: int):
+    """
+    Удаляет занятие по его ID.
+
+    Args:
+        cid: ID занятия.
+    """
+
     async with aiosqlite.connect(DB) as db:
         await db.execute("DELETE FROM classes WHERE id=?", (cid,))
         await db.commit()
 
+
 # ── Assignments ───────────────────────────────────────────────────────────────
 
 async def assignments_for_class(cid: int) -> list:
+    """
+    Возвращает список заданий для занятия: специфичные для этого занятия или общие для предмета.
+
+    Args:
+        cid: ID занятия.
+
+    Returns:
+        Список заданий, отсортированных по дедлайну.
+    """
     cls = await get_class(cid)
     if not cls: return []
     async with aiosqlite.connect(DB) as db:
@@ -216,7 +381,23 @@ async def assignments_for_class(cid: int) -> list:
         )
         return [dict(r) for r in await cur.fetchall()]
 
+
 async def add_assignment(class_id, subject_id, title, description, deadline, url) -> int:
+    """
+    Создает новое учебное задание.
+
+    Args:
+        class_id: ID занятия (может быть None для общих заданий предмета).
+        subject_id: ID предмета.
+        title: Название задания.
+        description: Описание.
+        deadline: Дедлайн в формате ISO.
+        url: Ссылка на материал.
+
+    Returns:
+        ID созданного задания.
+    """
+
     async with aiosqlite.connect(DB) as db:
         cur = await db.execute(
             "INSERT INTO assignments (class_id,subject_id,title,description,deadline,url) VALUES (?,?,?,?,?,?)",
@@ -225,21 +406,48 @@ async def add_assignment(class_id, subject_id, title, description, deadline, url
         await db.commit()
         return cur.lastrowid
 
+
 async def delete_assignment(aid: int):
+    """
+    Удаляет задание по его ID.
+
+    Args:
+        aid: ID задания.
+    """
     async with aiosqlite.connect(DB) as db:
         await db.execute("DELETE FROM assignments WHERE id=?", (aid,))
         await db.commit()
 
+
 # ── Queues ────────────────────────────────────────────────────────────────────
 
 async def queue_for_class(cid: int) -> Optional[dict]:
+    """
+    Получает информацию об очереди конкретного занятия.
+
+    Args:
+        cid: ID занятия.
+
+    Returns:
+        Словарь очереди или None.
+    """
     async with aiosqlite.connect(DB) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM queues WHERE class_id=?", (cid,))
         row = await cur.fetchone()
         return dict(row) if row else None
 
+
 async def get_queue(qid: int) -> Optional[dict]:
+    """
+    Получает информацию об очереди по её ID с расширенными данными о занятии и предмете.
+
+    Args:
+        qid: ID очереди.
+
+    Returns:
+        Словарь данных очереди или None.
+    """
     async with aiosqlite.connect(DB) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
@@ -250,12 +458,30 @@ async def get_queue(qid: int) -> Optional[dict]:
         row = await cur.fetchone()
         return dict(row) if row else None
 
+
 async def set_queue_status(qid: int, status: str):
+    """
+    Меняет статус очереди (например, "pending", "closed", "completed").
+
+    Args:
+        qid: ID очереди.
+        status: Статус очереди.
+    """
     async with aiosqlite.connect(DB) as db:
         await db.execute("UPDATE queues SET status=? WHERE id=?", (status, qid))
         await db.commit()
 
+
 async def queue_entries(qid: int) -> list:
+    """
+    Получает список всех участников очереди с данными их профилей.
+
+    Args:
+        qid: ID очереди.
+
+    Returns:
+        Список участников, отсортированных по их позиции в очереди.
+    """
     async with aiosqlite.connect(DB) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
@@ -266,28 +492,64 @@ async def queue_entries(qid: int) -> list:
         )
         return [dict(r) for r in await cur.fetchall()]
 
+
 async def is_in_queue(qid: int, user_id: int) -> bool:
+    """
+    Проверяет, записан ли пользователь в очередь.
+
+    Args:
+        qid: ID очереди.
+        user_id: ID пользователя.
+
+    Returns:
+        True, если пользователь в очереди, иначе False.
+    """
     async with aiosqlite.connect(DB) as db:
         cur = await db.execute(
             "SELECT id FROM entries WHERE queue_id=? AND user_id=?", (qid, user_id)
         )
         return bool(await cur.fetchone())
 
+
 async def join_queue(qid: int, user_id: int):
+    """
+    Добавляет пользователя в очередь.
+
+    Args:
+        qid: ID очереди.
+        user_id: ID пользователя.
+    """
     async with aiosqlite.connect(DB) as db:
         await db.execute(
             "INSERT OR IGNORE INTO entries (queue_id, user_id) VALUES (?,?)", (qid, user_id)
         )
         await db.commit()
 
+
 async def leave_queue(qid: int, user_id: int):
+    """
+    Удаляет пользователя из очереди.
+
+    Args:
+        qid: ID очереди.
+        user_id: ID пользователя.
+    """
     async with aiosqlite.connect(DB) as db:
         await db.execute(
             "DELETE FROM entries WHERE queue_id=? AND user_id=?", (qid, user_id)
         )
         await db.commit()
 
+
 async def randomize_queue(qid: int):
+    """
+    Перемешивает очередь, распределяя позиции на основе рейтинга пользователей,
+    и закрывает её.
+
+    Args:
+        qid: ID очереди.
+    """
+
     async with aiosqlite.connect(DB) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
@@ -320,7 +582,16 @@ async def randomize_queue(qid: int):
         await db.execute("UPDATE queues SET status='closed' WHERE id=?", (qid,))
         await db.commit()
 
+
 async def mark_submission(qid: int, user_id: int, kind: str):
+    """
+    Отмечает факт сдачи работы пользователем и обновляет его рейтинг.
+
+    Args:
+        qid: ID очереди.
+        user_id: ID пользователя.
+        kind: Результат сдачи ("on_time", "late", "no_show").
+    """
     submitted = 1 if kind != "no_show" else 0
     on_time   = 1 if kind == "on_time" else 0
     async with aiosqlite.connect(DB) as db:
@@ -331,7 +602,18 @@ async def mark_submission(qid: int, user_id: int, kind: str):
         await db.commit()
     await apply_rating(user_id, kind)
 
+
 async def carry_queue(qid: int, next_class_id: int) -> int:
+    """
+    Переносит пользователей, не сдавших работу в текущей очереди, в очередь следующего занятия.
+
+    Args:
+        qid: ID текущей очереди.
+        next_class_id: ID следующего занятия.
+
+    Returns:
+        ID очереди следующего занятия.
+    """
     async with aiosqlite.connect(DB) as db:
         db.row_factory = aiosqlite.Row
         nq_cur = await db.execute("SELECT id FROM queues WHERE class_id=?", (next_class_id,))
