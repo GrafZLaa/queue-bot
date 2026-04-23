@@ -1,8 +1,11 @@
+"""Application entry point for the Queue Bot package."""
+
 import asyncio
 import logging
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from aiogram import Bot, Dispatcher, F
@@ -25,11 +28,12 @@ TOKEN     = os.getenv("BOT_TOKEN", "")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
 PORT      = int(os.getenv("PORT", "3000"))
 WEB_URL   = os.getenv("WEB_URL", f"http://localhost:{PORT}")
+PACKAGE_DIR = Path(__file__).resolve().parent
+INDEX_HTML = PACKAGE_DIR / "index.html"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
 
-bot = Bot(token=TOKEN)
 dp  = Dispatcher(storage=MemoryStorage())
 
 
@@ -58,8 +62,14 @@ CAT_LABEL  = {"good": "Добросовестный", "middle": "Средний"
 STAT_EMOJI = {"pending": "⏳", "open": "🟢", "closed": "🔴", "completed": "✅"}
 
 
-def kb(*rows): return InlineKeyboardMarkup(inline_keyboard=list(rows))
-def btn(text, data): return InlineKeyboardButton(text=text, callback_data=data)
+def kb(*rows):
+    """Build an inline keyboard from preassembled button rows."""
+    return InlineKeyboardMarkup(inline_keyboard=list(rows))
+
+
+def btn(text, data):
+    """Create a callback button with the provided label and callback data."""
+    return InlineKeyboardButton(text=text, callback_data=data)
 
 
 def parse_dt(text: str) -> Optional[str]:
@@ -200,7 +210,9 @@ async def cb_lb(cq: CallbackQuery):
 
 
 # ── Admin ─────────────────────────────────────────────────────────────────────
-def is_admin(cq): return cq.from_user.id in ADMIN_IDS
+def is_admin(cq):
+    """Check whether the callback author is listed as an administrator."""
+    return cq.from_user.id in ADMIN_IDS
 
 @dp.callback_query(F.data == "admin")
 async def cb_admin(cq: CallbackQuery):
@@ -413,7 +425,7 @@ async def cb_closeq(cq: CallbackQuery):
     for e in await db.queue_entries(qid):
         try:
             pos=e["position"] or "—"; qcat=e.get("q_category") or "middle"
-            await bot.send_message(e["telegram_id"],
+            await cq.bot.send_message(e["telegram_id"],
                 f"🎲 *Очередь сформирована!*\n\nПозиция: *{pos}*\nКатегория: {CAT_EMOJI[qcat]} {CAT_LABEL[qcat]}\n\nУдачи! 💪",
                 parse_mode="Markdown")
         except: pass
@@ -538,7 +550,9 @@ async def fsm_edit_rating(msg, state):
 
 
 @dp.callback_query(F.data == "noop")
-async def cb_noop(cq): await cq.answer()
+async def cb_noop(cq):
+    """Acknowledge a callback query without changing the current message."""
+    await cq.answer()
 
 
 # ── Web API ───────────────────────────────────────────────────────────────────
@@ -552,8 +566,7 @@ def add_cors(resp):
 async def serve_index(request):
     """Возвращает статический файл index.html для WebApp."""
     try:
-        with open("index.html","r",encoding="utf-8") as f:
-            return web.Response(text=f.read(),content_type="text/html")
+        return web.Response(text=INDEX_HTML.read_text(encoding="utf-8"), content_type="text/html")
     except FileNotFoundError:
         return web.Response(text="index.html not found",status=404)
 
@@ -650,8 +663,16 @@ async def options_handler(request):
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
+def create_bot() -> Bot:
+    """Create and validate the Telegram bot instance from environment settings."""
+    if not TOKEN:
+        raise RuntimeError("BOT_TOKEN is not set. Configure the environment before starting the app.")
+    return Bot(token=TOKEN)
+
+
 async def main():
     """Точка входа: инициализация БД, запуск Web-сервера и бота."""
+    bot = create_bot()
     await db.init()
     app=web.Application()
     app.router.add_get("/",serve_index)
@@ -667,7 +688,12 @@ async def main():
     await dp.start_polling(bot)
 
 
-if __name__=="__main__":
+def run() -> None:
+    """Run the application with the Windows event-loop workaround when needed."""
     if sys.platform=="win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main())
+
+
+if __name__=="__main__":
+    run()

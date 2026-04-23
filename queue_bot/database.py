@@ -382,7 +382,14 @@ async def assignments_for_class(cid: int) -> list:
         return [dict(r) for r in await cur.fetchall()]
 
 
-async def add_assignment(class_id, subject_id, title, description, deadline, url) -> int:
+async def add_assignment(
+    class_id: Optional[int],
+    subject_id: int,
+    title: str,
+    description: Optional[str],
+    deadline: Optional[str],
+    url: Optional[str],
+) -> int:
     """
     Создает новое учебное задание.
 

@@ -1,8 +1,8 @@
-# Bot Module
+# API Reference
 
-Документация основного модуля бота.
+This section is generated from the project source code and reflects the current package structure.
 
-## Main Functions
+## Bot module
 
 ::: queue_bot.main
     handler: python
@@ -12,7 +12,7 @@
       show_root_heading: true
       merge_init_into_class: true
 
-## Database Functions
+## Database module
 
 ::: queue_bot.database
     handler: python

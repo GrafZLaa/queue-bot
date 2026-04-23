@@ -1,10 +1,22 @@
 # Queue Bot Documentation
 
-Telegram бот для управления очередью с поддержкой SQLite.
+Queue Bot is a Telegram bot for managing student queues, schedules and assignment tracking.
 
-## Быстрый старт
+## Quick start
+
+Install the application dependencies:
 
 ```bash
-pip install -r requirements.txt
-python main.py
+python -m pip install -r requirements.txt
 ```
+
+Run the bot and the embedded web server:
+
+```bash
+python -m queue_bot
+```
+
+## Build tasks
+
+- Package build: `python -m build`
+- Documentation build: `python -m mkdocs build --strict`
