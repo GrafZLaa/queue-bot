@@ -1,9 +1,11 @@
-import aiosqlite
+import os
 import random
 from datetime import datetime
 from typing import Optional
 
-DB = "queue.db"
+import aiosqlite
+
+DB = os.getenv("DB_PATH", "queue.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
