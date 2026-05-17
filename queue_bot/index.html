@@ -1,780 +1,1051 @@
 <!DOCTYPE html>
-<html lang="ru" data-theme="light">
+<html lang="ru" data-theme="dark">
 <head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
-<title>Журнал очереди</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Пульс РТУ МИРЭА</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-/* ── Tokens ── */
+:root {
+  --bg: #111111;
+  --band: #1d1d1d;
+  --panel: #141414;
+  --panel-soft: #191919;
+  --line: #303030;
+  --line-strong: #3d3d3d;
+  --text: #f7f8fb;
+  --muted: #a7adba;
+  --faint: #6f7683;
+  --blue: #1f6feb;
+  --blue-soft: #0f346e;
+  --cyan: #12b7c8;
+  --green: #24c875;
+  --yellow: #f2b84b;
+  --red: #ef5350;
+  --focus: 0 0 0 2px rgba(31, 111, 235, .55);
+}
 :root[data-theme="light"] {
-  --bg:        #f5f7fa;
-  --surface:   #ffffff;
-  --surface2:  #f0f2f5;
-  --border:    #e2e6ed;
-  --text:      #1a1d23;
-  --subtext:   #6b7280;
-  --accent:    #2563eb;
-  --accent-bg: #eff6ff;
-  --green:     #16a34a;
-  --green-bg:  #f0fdf4;
-  --yellow:    #d97706;
-  --yellow-bg: #fffbeb;
-  --red:       #dc2626;
-  --red-bg:    #fef2f2;
-  --shadow:    0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06);
-  --shadow-md: 0 4px 6px rgba(0,0,0,.07), 0 2px 4px rgba(0,0,0,.06);
+  --bg: #f3f5f8;
+  --band: #ffffff;
+  --panel: #ffffff;
+  --panel-soft: #f7f8fa;
+  --line: #d9dde5;
+  --line-strong: #c4cad6;
+  --text: #151820;
+  --muted: #5b6472;
+  --faint: #7a8290;
+  --blue: #1769e8;
+  --blue-soft: #e9f1ff;
+  --cyan: #0891a2;
+  --green: #158d54;
+  --yellow: #a76a00;
+  --red: #c53232;
 }
-:root[data-theme="dark"] {
-  --bg:        #0f1117;
-  --surface:   #1a1d27;
-  --surface2:  #252836;
-  --border:    #2e3347;
-  --text:      #f1f3f9;
-  --subtext:   #8b92a5;
-  --accent:    #3b82f6;
-  --accent-bg: #1e2a3d;
-  --green:     #22c55e;
-  --green-bg:  #162419;
-  --yellow:    #f59e0b;
-  --yellow-bg: #1f1b10;
-  --red:       #ef4444;
-  --red-bg:    #1f1212;
-  --shadow:    0 1px 3px rgba(0,0,0,.3);
-  --shadow-md: 0 4px 6px rgba(0,0,0,.4);
-}
-
-/* ── Reset ── */
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html { font-size: 16px; }
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
-  min-height: 100dvh;
-  padding-bottom: env(safe-area-inset-bottom);
-  transition: background .2s, color .2s;
+  font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0;
 }
-
-/* ── Layout ── */
-.app { max-width: 480px; margin: 0 auto; }
-
-/* ── Header ── */
-.header {
-  position: sticky; top: 0; z-index: 50;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  padding: 12px 16px 10px;
-  display: flex; align-items: center; gap: 8px;
+button, input, select {
+  font: inherit;
 }
-.header-title { flex: 1; }
-.header-title h1 { font-size: 17px; font-weight: 700; letter-spacing: -.3px; }
-.header-title p  { font-size: 12px; color: var(--subtext); margin-top: 1px; }
-
-.theme-btn {
-  width: 36px; height: 36px;
-  border-radius: 50%;
-  background: var(--surface2);
-  border: 1px solid var(--border);
+button {
+  color: var(--text);
   cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
+}
+.topbar {
+  height: 62px;
+  background: #151515;
+  border-bottom: 1px solid #232323;
+  display: flex;
+  align-items: stretch;
+  position: sticky;
+  top: 0;
+  z-index: 40;
+}
+:root[data-theme="light"] .topbar {
+  background: #ffffff;
+  border-bottom-color: var(--line);
+}
+.brand {
+  width: 290px;
+  min-width: 250px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 22px;
+}
+.brand-mark {
+  width: 30px;
+  height: 34px;
+  border: 1px solid #bfa552;
+  display: grid;
+  place-items: center;
+  color: #f7d46a;
+  font-size: 11px;
+  font-weight: 800;
+  background: linear-gradient(180deg, #243a6b, #111a2f);
+}
+.brand-name {
+  font-size: 20px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.tabs {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+}
+.tab {
+  border: 0;
+  border-left: 1px solid transparent;
+  border-right: 1px solid transparent;
+  background: transparent;
+  padding: 0 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 140px;
+  font-weight: 650;
+}
+.tab.active {
+  background: var(--blue);
+  color: #fff;
+}
+.tab-icon {
+  font-size: 16px;
+}
+.profile {
+  min-width: 180px;
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  color: #2f86ff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.section-kicker {
+  height: 54px;
+  background: var(--band);
+  display: flex;
+  align-items: center;
+  padding: 0 max(26px, env(safe-area-inset-left));
+  font-weight: 650;
+}
+.workspace {
+  padding: 0 26px 34px;
+}
+.surface {
+  min-height: calc(100vh - 116px);
+  background: var(--panel);
+  border-radius: 8px 8px 0 0;
+  padding: 24px 28px;
+}
+.view-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 16px;
+}
+h1 {
+  font-size: 22px;
+  line-height: 1.2;
+  margin: 0;
+}
+.ghost-button, .icon-button, .primary-button, .danger-button, .plain-button {
+  height: 34px;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+.primary-button {
+  background: var(--blue);
+  border-color: var(--blue);
+  color: #fff;
+  font-weight: 700;
+}
+.danger-button {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+  font-weight: 700;
+}
+.plain-button {
+  background: var(--panel-soft);
+}
+.icon-button {
+  width: 34px;
+  padding: 0;
+}
+button:focus-visible, input:focus-visible, select:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+.journal-grid {
+  display: grid;
+  grid-template-columns: minmax(410px, 45%) minmax(430px, 1fr);
+  gap: 40px;
+  align-items: start;
+}
+.calendar-head {
+  display: grid;
+  grid-template-columns: 42px 1fr 42px;
+  align-items: center;
+  margin: 4px 0 18px;
+}
+.calendar-month {
+  text-align: center;
   font-size: 18px;
-  transition: background .15s;
+  font-weight: 760;
 }
-.theme-btn:active { background: var(--border); }
-
-/* ── Week nav ── */
-.week-nav {
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  padding: 8px 16px;
+.week-stat {
+  color: var(--muted);
+  font-weight: 650;
+  text-align: center;
+  margin-bottom: 18px;
 }
-.week-nav-top {
-  display: flex; align-items: center; justify-content: space-between;
+.month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(42px, 1fr));
+  gap: 12px;
+}
+.weekday, .day {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.weekday {
+  color: var(--text);
+  font-weight: 650;
+}
+.day {
+  border: 1px solid transparent;
+  border-radius: 4px;
+  position: relative;
+  flex-direction: column;
+  gap: 4px;
+  background: transparent;
+}
+.day.outside {
+  color: var(--muted);
+}
+.day.today:not(.selected) {
+  border-color: var(--blue);
+}
+.day.selected {
+  background: var(--blue);
+  color: #fff;
+}
+.day-count {
+  min-width: 14px;
+  height: 14px;
+  border-radius: 10px;
+  background: #0f4f9a;
+  color: #fff;
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+  padding: 0 4px;
+}
+.day.selected .day-count {
+  background: rgba(255,255,255,.27);
+}
+.date-line {
+  display: grid;
+  grid-template-columns: 100px 1fr 1fr;
+  gap: 28px;
+  align-items: center;
+  margin-bottom: 20px;
+}
+.date-line strong {
+  font-size: 16px;
+}
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.class-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px 20px 16px;
+  background: transparent;
+  transition: border-color .15s, background .15s;
+}
+.class-card:hover {
+  border-color: var(--line-strong);
+  background: var(--panel-soft);
+}
+.class-card-top {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  align-items: center;
+  gap: 12px;
   margin-bottom: 10px;
 }
-.week-label { font-size: 14px; font-weight: 600; }
-.nav-btn {
-  width: 30px; height: 30px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--surface2);
-  cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 14px; color: var(--text);
-  transition: background .15s;
+.time {
+  font-size: 15px;
+  color: var(--text);
 }
-.nav-btn:active { background: var(--border); }
-
-.days-row {
-  display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px;
-}
-.day-cell {
-  display: flex; flex-direction: column; align-items: center; gap: 3px;
-  padding: 4px 2px;
-  border-radius: 10px;
-  cursor: pointer;
-  transition: background .15s;
-  user-select: none;
-}
-.day-cell:active { background: var(--surface2); }
-.day-cell.active {
-  background: var(--accent);
-}
-.day-cell.active .day-name,
-.day-cell.active .day-num { color: #fff !important; }
-.day-cell.active .day-dot { background: rgba(255,255,255,.7) !important; }
-.day-cell.today .day-num {
-  background: var(--accent-bg);
-  color: var(--accent);
-  border-radius: 50%;
-  width: 26px; height: 26px;
-  display: flex; align-items: center; justify-content: center;
-}
-.day-cell.active.today .day-num { background: rgba(255,255,255,.25); color: #fff; }
-
-.day-name { font-size: 11px; font-weight: 500; color: var(--subtext); }
-.day-num  { font-size: 15px; font-weight: 600; width: 26px; height: 26px;
-            display: flex; align-items: center; justify-content: center; }
-.day-dots { display: flex; gap: 2px; min-height: 6px; }
-.day-dot  { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
-
-/* ── Date pill ── */
-.date-pill {
-  margin: 12px 16px;
-  display: inline-flex; align-items: center; gap: 6px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 6px 12px;
-  font-size: 13px; font-weight: 500;
-  box-shadow: var(--shadow);
-}
-
-/* ── Classes list ── */
-.classes { padding: 0 16px 80px; display: flex; flex-direction: column; gap: 10px; }
-
-.class-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
+.badge {
+  min-width: 34px;
+  height: 26px;
   border-radius: 14px;
-  padding: 14px;
-  box-shadow: var(--shadow);
-  cursor: pointer;
-  transition: box-shadow .15s, transform .1s;
-  -webkit-tap-highlight-color: transparent;
+  background: var(--cyan);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 800;
 }
-.class-card:active { transform: scale(.985); box-shadow: none; }
-
-.class-card-top {
-  display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px;
+.room {
+  text-align: right;
+  font-weight: 750;
+  color: #dce8ff;
 }
-.time-badge {
-  background: var(--accent-bg);
-  color: var(--accent);
-  border-radius: 8px;
-  padding: 4px 8px;
-  font-size: 12px; font-weight: 600;
-  white-space: nowrap; flex-shrink: 0;
+:root[data-theme="light"] .room {
+  color: #123b77;
 }
-.type-badge {
-  background: var(--surface2);
-  color: var(--subtext);
-  border-radius: 6px;
-  padding: 3px 7px;
-  font-size: 11px; font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .4px;
+.subject {
+  font-size: 16px;
+  font-weight: 750;
+  margin-bottom: 10px;
 }
-.room-badge {
-  margin-left: auto;
-  font-size: 12px; font-weight: 600;
-  color: var(--subtext);
+.teacher {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
+  overflow: hidden;
 }
-.class-name {
-  font-size: 15px; font-weight: 600;
-  line-height: 1.3; margin-bottom: 6px;
-}
-.class-meta {
-  display: flex; align-items: center; justify-content: space-between;
-}
-.teacher-name {
-  font-size: 12px; color: var(--subtext);
-  display: flex; align-items: center; gap: 4px;
-}
-.queue-pill {
-  display: flex; align-items: center; gap: 4px;
-  border-radius: 20px;
-  padding: 3px 9px;
-  font-size: 12px; font-weight: 600;
-}
-.queue-pill.open    { background: var(--green-bg);  color: var(--green); }
-.queue-pill.pending { background: var(--surface2);  color: var(--subtext); }
-.queue-pill.closed  { background: var(--red-bg);    color: var(--red); }
-.queue-pill.completed { background: var(--surface2); color: var(--subtext); }
-
-/* ── Empty ── */
-.empty {
-  text-align: center; padding: 60px 20px;
-  color: var(--subtext);
-}
-.empty-icon { font-size: 48px; margin-bottom: 12px; }
-.empty p { font-size: 14px; }
-
-/* ── Modal overlay ── */
-.modal-overlay {
-  position: fixed; inset: 0; z-index: 100;
-  background: rgba(0,0,0,.5);
-  display: flex; align-items: flex-end;
-  opacity: 0; pointer-events: none;
-  transition: opacity .25s;
-}
-.modal-overlay.visible { opacity: 1; pointer-events: all; }
-
-.modal {
-  background: var(--surface);
-  border-radius: 20px 20px 0 0;
-  width: 100%;
-  max-height: 90dvh;
-  overflow-y: auto;
-  padding: 0 0 env(safe-area-inset-bottom);
-  transform: translateY(100%);
-  transition: transform .3s cubic-bezier(.32,0,.67,0);
-}
-.modal-overlay.visible .modal { transform: translateY(0); }
-
-.modal-handle {
-  width: 36px; height: 4px;
-  background: var(--border);
-  border-radius: 2px;
-  margin: 10px auto 0;
-}
-.modal-header {
-  padding: 12px 16px 0;
-  display: flex; align-items: flex-start; justify-content: space-between;
-}
-.modal-close {
-  width: 28px; height: 28px;
-  border-radius: 50%;
-  background: var(--surface2);
-  border: none; cursor: pointer;
-  font-size: 14px; color: var(--subtext);
-  display: flex; align-items: center; justify-content: center;
+.card-action-btn {
+  height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+  border-radius: 5px;
   flex-shrink: 0;
 }
-.modal-body { padding: 12px 16px 20px; }
-
-/* ── Modal class detail ── */
-.modal-subject { font-size: 19px; font-weight: 700; line-height: 1.3; margin-bottom: 4px; }
-.modal-teacher { font-size: 13px; color: var(--subtext); margin-bottom: 14px; }
-
-.info-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 12px;
-  background: var(--surface2);
-  border-radius: 10px;
-  margin-bottom: 8px;
-  font-size: 14px;
+.queue-state {
+  color: var(--muted);
 }
-.info-row .label { color: var(--subtext); font-size: 12px; }
-.info-row .val   { font-weight: 600; margin-left: auto; }
-
-/* ── Assignments ── */
+.queue-state.open { color: var(--green); }
+.queue-state.closed { color: var(--red); }
+.queue-state.completed { color: var(--cyan); }
+.empty {
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  padding: 32px;
+  color: var(--muted);
+  text-align: center;
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.55);
+  z-index: 70;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.modal-backdrop.visible {
+  display: flex;
+}
+.modal {
+  width: min(760px, 100%);
+  max-height: min(760px, 92vh);
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 22px;
+}
+.modal-head {
+  display: grid;
+  grid-template-columns: 1fr 34px;
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 16px;
+}
+.modal h2 {
+  margin: 0 0 4px;
+  font-size: 22px;
+  line-height: 1.25;
+}
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 16px 0;
+}
+.meta {
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.meta span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+.meta strong {
+  display: block;
+  margin-top: 2px;
+}
 .section-title {
-  font-size: 12px; font-weight: 600;
-  color: var(--subtext); text-transform: uppercase;
-  letter-spacing: .6px; margin: 16px 0 8px;
+  margin: 20px 0 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .04em;
 }
-
-.asgn-card {
-  background: var(--surface2);
-  border-radius: 10px;
-  padding: 10px 12px;
+.assignment, .entry {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 11px 12px;
   margin-bottom: 8px;
+  background: var(--panel-soft);
 }
-.asgn-title { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
-.asgn-desc  { font-size: 12px; color: var(--subtext); margin-bottom: 4px; }
-.asgn-dl    { font-size: 11px; font-weight: 600; color: var(--red); }
-.asgn-link  {
-  display: inline-flex; align-items: center; gap: 4px;
-  margin-top: 6px;
-  color: var(--accent);
-  font-size: 12px; font-weight: 600;
-  text-decoration: none;
+.entry {
+  display: grid;
+  grid-template-columns: 34px 1fr auto;
+  gap: 12px;
+  align-items: center;
 }
-
-/* ── Queue section ── */
-.queue-status-bar {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  margin-bottom: 12px;
-  font-size: 13px; font-weight: 600;
-}
-.queue-status-bar.open     { background: var(--green-bg);  color: var(--green); }
-.queue-status-bar.pending  { background: var(--surface2);  color: var(--subtext); }
-.queue-status-bar.closed   { background: var(--red-bg);    color: var(--red); }
-.queue-status-bar.completed{ background: var(--surface2);  color: var(--subtext); }
-.q-count { margin-left: auto; opacity: .7; font-weight: 400; }
-
-/* ── Queue entries ── */
-.q-entry {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border);
-}
-.q-entry:last-child { border-bottom: none; }
-.q-pos {
-  width: 28px; height: 28px; border-radius: 50%;
-  background: var(--surface2);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 12px; font-weight: 700; flex-shrink: 0;
-}
-.q-pos.good   { background: var(--green-bg);  color: var(--green); }
-.q-pos.middle { background: var(--yellow-bg); color: var(--yellow); }
-.q-pos.poor   { background: var(--red-bg);    color: var(--red); }
-.q-name  { font-size: 14px; font-weight: 500; }
-.q-cat   { font-size: 11px; color: var(--subtext); }
-.q-sub   { margin-left: auto; font-size: 13px; }
-
-/* ── Action button ── */
-.action-btn {
-  width: 100%; padding: 15px;
-  border-radius: 14px; border: none;
-  font-size: 16px; font-weight: 700;
-  cursor: pointer;
-  transition: opacity .15s, transform .1s;
-  margin-top: 14px;
-}
-.action-btn:active    { transform: scale(.97); }
-.action-btn:disabled  { opacity: .5; cursor: not-allowed; }
-.action-btn.join  { background: var(--accent); color: #fff; }
-.action-btn.leave { background: var(--red);    color: #fff; }
-.action-btn.disabled-look { background: var(--surface2); color: var(--subtext); }
-
-/* ── Loading spinner ── */
-.spinner-wrap {
-  display: flex; align-items: center; justify-content: center;
-  padding: 60px 0; color: var(--subtext);
-}
-.spinner {
-  width: 28px; height: 28px;
-  border: 3px solid var(--border);
-  border-top-color: var(--accent);
+.pos {
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
-  animation: spin .8s linear infinite;
+  display: grid;
+  place-items: center;
+  background: #2a2a2a;
+  font-weight: 800;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
-
-/* ── Toast ── */
+.pos.good { color: var(--green); }
+.pos.middle { color: var(--yellow); }
+.pos.poor { color: var(--red); }
+.entry-actions {
+  display: flex;
+  gap: 6px;
+}
+.small-action {
+  width: 30px;
+  height: 28px;
+  border-radius: 5px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+}
+.admin-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) 1fr;
+  gap: 24px;
+}
+.form-panel, .settings-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  padding: 16px;
+}
+.field {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.field label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.field input, .field select {
+  height: 36px;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  color: var(--text);
+  padding: 0 10px;
+}
+.subject-list {
+  display: grid;
+  gap: 8px;
+}
+.subject-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.muted { color: var(--muted); }
+.hidden { display: none !important; }
 #toast {
-  position: fixed; bottom: 80px; left: 50%;
-  transform: translateX(-50%) translateY(20px);
-  background: var(--text); color: var(--bg);
-  border-radius: 24px; padding: 10px 18px;
-  font-size: 13px; font-weight: 600;
-  white-space: nowrap; z-index: 200;
-  opacity: 0; transition: opacity .2s, transform .2s;
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%) translateY(12px);
+  background: #f6f7fb;
+  color: #111;
+  border-radius: 24px;
+  padding: 10px 16px;
+  opacity: 0;
   pointer-events: none;
+  transition: opacity .18s, transform .18s;
+  z-index: 100;
+  font-weight: 700;
 }
-#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+#toast.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+@media (max-width: 900px) {
+  .topbar {
+    height: auto;
+    flex-wrap: wrap;
+  }
+  .brand {
+    width: 100%;
+    height: 56px;
+  }
+  .tabs {
+    width: 100%;
+    overflow-x: auto;
+  }
+  .tab {
+    min-width: 126px;
+    height: 48px;
+  }
+  .profile {
+    position: absolute;
+    top: 0;
+    right: 0;
+    height: 56px;
+    max-width: 44%;
+  }
+  .workspace {
+    padding: 0 12px 24px;
+  }
+  .surface {
+    padding: 18px 14px;
+  }
+  .journal-grid, .admin-grid {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+  .date-line {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .month-grid {
+    gap: 6px;
+  }
+  .meta-grid {
+    grid-template-columns: 1fr;
+  }
+}
 </style>
 </head>
 <body>
-<div class="app">
-  <!-- Header -->
-  <div class="header">
-    <div class="header-title">
-      <h1>📋 Журнал очереди</h1>
-      <p id="hdr-sub">Загрузка...</p>
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">РТУ</div>
+    <div class="brand-name">Пульс РТУ МИРЭА</div>
+  </div>
+  <nav class="tabs">
+    <button class="tab active" data-view="journal" onclick="switchView('journal')"><span class="tab-icon">▣</span>Мои занятия</button>
+    <button class="tab" data-view="services" onclick="switchView('services')"><span class="tab-icon">⌘</span>Сервисы</button>
+    <button class="tab" data-view="settings" onclick="switchView('settings')"><span class="tab-icon">⚙</span>Настройки</button>
+  </nav>
+  <div class="profile" id="profile-name">Гость</div>
+</header>
+
+<div class="section-kicker" id="section-kicker">Журнал студента</div>
+<main class="workspace">
+  <section class="surface" id="view-journal">
+    <div class="view-title">
+      <h1>Журнал студента</h1>
+      <button class="ghost-button" onclick="showQrStub()">▦ Сканер QR-кода</button>
     </div>
-    <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">🌙</button>
-  </div>
-
-  <!-- Week nav -->
-  <div class="week-nav">
-    <div class="week-nav-top">
-      <button class="nav-btn" onclick="changeWeek(-1)">‹</button>
-      <span class="week-label" id="week-label">Март 2026</span>
-      <button class="nav-btn" onclick="changeWeek(1)">›</button>
+    <div class="journal-grid">
+      <aside>
+        <div class="calendar-head">
+          <button class="icon-button" onclick="changeMonth(-1)">‹</button>
+          <div class="calendar-month" id="month-label">Май 2026</div>
+          <button class="icon-button" onclick="changeMonth(1)">›</button>
+        </div>
+        <div class="week-stat" id="week-label">20 неделя</div>
+        <div class="month-grid" id="month-grid"></div>
+      </aside>
+      <section>
+        <div class="date-line">
+          <strong id="selected-date">17.05.2026</strong>
+          <span class="muted" id="group-filter">Все группы</span>
+          <span class="muted" id="day-summary">Загрузка</span>
+        </div>
+        <div class="cards" id="classes-list"></div>
+      </section>
     </div>
-    <div class="days-row" id="days-row"></div>
-  </div>
+  </section>
 
-  <!-- Date pill -->
-  <div style="padding: 0 16px; margin-top: 12px; margin-bottom: 4px;">
-    <div class="date-pill">📅 <span id="date-label">сегодня</span></div>
-  </div>
+  <section class="surface hidden" id="view-services">
+    <div class="view-title">
+      <h1>Сервисы</h1>
+      <button class="ghost-button" onclick="loadAdminData()">⟳ Обновить</button>
+    </div>
+    <div id="student-services">
+      <div class="settings-panel">
+        <h2>Очереди и сдачи</h2>
+        <p class="muted">Открытые записи отображаются в журнале занятий. После закрытия очереди порядок формируется по рейтинговым категориям и случайному порядку внутри категории.</p>
+      </div>
+    </div>
+    <div id="admin-services" class="admin-grid hidden">
+      <div>
+        <div class="form-panel">
+          <h2>Новый предмет</h2>
+          <div class="field"><label>Название</label><input id="new-subject-name" placeholder="Теория вероятностей"></div>
+          <div class="field"><label>Группа</label><input id="new-subject-group" placeholder="ИКБО-01-23 или пусто"></div>
+          <button class="primary-button" onclick="createSubject()">Добавить</button>
+        </div>
+        <div class="form-panel" style="margin-top:16px">
+          <h2>Новая пара</h2>
+          <div class="field"><label>Предмет</label><select id="class-subject"></select></div>
+          <div class="field"><label>Дата</label><input id="class-date" type="date"></div>
+          <div class="field"><label>Начало</label><input id="class-time" type="time" value="09:00"></div>
+          <div class="field"><label>Длительность</label><input id="class-duration" type="number" value="90" min="15" max="360"></div>
+          <div class="field"><label>Аудитория</label><input id="class-room" placeholder="А-403"></div>
+          <div class="field"><label>Преподаватель</label><input id="class-teacher" placeholder="Осадченко А. В."></div>
+          <button class="primary-button" onclick="createClass()">Создать пару</button>
+        </div>
+      </div>
+      <div>
+        <h2>Предметы</h2>
+        <div class="subject-list" id="admin-subjects"></div>
+      </div>
+    </div>
+  </section>
 
-  <!-- Classes -->
-  <div class="classes" id="classes-list">
-    <div class="spinner-wrap"><div class="spinner"></div></div>
+  <section class="surface hidden" id="view-settings">
+    <div class="view-title">
+      <h1>Настройки</h1>
+      <button class="ghost-button" onclick="toggleTheme()">Сменить тему</button>
+    </div>
+    <div class="settings-panel" id="settings-body"></div>
+  </section>
+</main>
+
+<div class="modal-backdrop" id="modal-backdrop" onclick="backdropClose(event)">
+  <div class="modal">
+    <div class="modal-head">
+      <div>
+        <h2 id="modal-title">Занятие</h2>
+        <div class="muted" id="modal-subtitle"></div>
+      </div>
+      <button class="icon-button" onclick="closeModal()">×</button>
+    </div>
+    <div id="modal-body"></div>
   </div>
 </div>
-
-<!-- Modal -->
-<div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
-  <div class="modal" id="modal">
-    <div class="modal-handle"></div>
-    <div class="modal-header">
-      <div style="flex:1"></div>
-      <button class="modal-close" onclick="hideModal()">✕</button>
-    </div>
-    <div class="modal-body" id="modal-body"></div>
-  </div>
-</div>
-
 <div id="toast"></div>
 
 <script>
-// ── Telegram init ──────────────────────────────────────────────────────────
 const tg = window.Telegram?.WebApp;
 if (tg) { tg.ready(); tg.expand(); }
-const TG_USER = tg?.initDataUnsafe?.user;
-const ME = {
-  id:   TG_USER?.id || 0,
-  name: TG_USER ? `${TG_USER.first_name}${TG_USER.last_name ? ' '+TG_USER.last_name : ''}` : 'Гость',
-};
+const INIT_DATA = tg?.initData || '';
+const TG_USER = tg?.initDataUnsafe?.user || null;
+const MONTHS = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+const MONTHS_GEN = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
+const WEEKDAYS = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+let today = new Date();
+let cursor = new Date(today.getFullYear(), today.getMonth(), 1);
+let selected = new Date(today);
+let me = { authenticated: false, registered: false, is_admin: false, user: null };
+let monthCounts = {};
+let adminSubjects = [];
+let currentDetail = null;
 
-// Apply Telegram theme if available
-if (tg?.colorScheme) {
-  document.documentElement.dataset.theme = tg.colorScheme;
-}
+if (tg?.colorScheme) document.documentElement.dataset.theme = tg.colorScheme;
+const savedTheme = localStorage.getItem('queue-theme');
+if (savedTheme && !tg?.colorScheme) document.documentElement.dataset.theme = savedTheme;
 
-// ── Theme ──────────────────────────────────────────────────────────────────
-function toggleTheme() {
-  const html = document.documentElement;
-  const next = html.dataset.theme === 'light' ? 'dark' : 'light';
-  html.dataset.theme = next;
-  document.getElementById('theme-btn').textContent = next === 'dark' ? '☀️' : '🌙';
-  localStorage.setItem('theme', next);
+function authHeaders() {
+  return INIT_DATA ? { 'X-Telegram-Init-Data': INIT_DATA } : {};
 }
-const savedTheme = localStorage.getItem('theme');
-if (savedTheme && !tg?.colorScheme) {
-  document.documentElement.dataset.theme = savedTheme;
-  document.getElementById('theme-btn').textContent = savedTheme === 'dark' ? '☀️' : '🌙';
-}
-
-// ── Date helpers ───────────────────────────────────────────────────────────
-const DAY_SHORT = ['Вс','Пн','Вт','Ср','Чт','Пт','Сб'];
-const MONTH_RU  = ['Январь','Февраль','Март','Апрель','Май','Июнь',
-                   'Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
-const MONTH_RU2 = ['января','февраля','марта','апреля','мая','июня',
-                   'июля','августа','сентября','октября','ноября','декабря'];
-
-function isoDate(d) {
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-}
-function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate()+n); return r; }
-function getMonday(d) {
-  const day = d.getDay(); // 0=Sun
-  const diff = day === 0 ? -6 : 1 - day;
-  return addDays(d, diff);
-}
-function weekNum(d) {
-  const jan1 = new Date(d.getFullYear(), 0, 1);
-  return Math.ceil((((d - jan1) / 86400000) + jan1.getDay() + 1) / 7);
-}
-
-// ── State ──────────────────────────────────────────────────────────────────
-let today       = new Date();
-let selectedDay = new Date(today);
-let weekStart   = getMonday(today);
-let scheduleCache = {};   // date → [{class data}]
-let currentQueue  = null; // queue data for open modal
-
-// ── API ───────────────────────────────────────────────────────────────────
 async function apiGet(path) {
-  const r = await fetch(path);
+  const r = await fetch(path, { headers: authHeaders() });
   return r.json();
 }
-async function apiPost(path, body) {
+async function apiPost(path, body = {}) {
   const r = await fetch(path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ ...body, init_data: INIT_DATA }),
   });
   return r.json();
 }
-
-async function getSchedule(date) {
-  if (scheduleCache[date]) return scheduleCache[date];
-  const d = await apiGet(`/api/schedule?date=${date}`);
-  scheduleCache[date] = d.classes || [];
-  return scheduleCache[date];
+function isoDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
-async function getQueueDetail(classId) {
-  return apiGet(`/api/queue/${classId}`);
+function sameDay(a, b) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
-async function joinQueue(classId) {
-  return apiPost(`/api/queue/${classId}/join`, { user_id: ME.id, name: ME.name });
+function weekNumber(date) {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
 }
-async function leaveQueue(classId) {
-  return apiPost(`/api/queue/${classId}/leave`, { user_id: ME.id });
+function switchView(view) {
+  for (const tab of document.querySelectorAll('.tab')) tab.classList.toggle('active', tab.dataset.view === view);
+  for (const section of ['journal','services','settings']) {
+    document.getElementById(`view-${section}`).classList.toggle('hidden', section !== view);
+  }
+  document.getElementById('section-kicker').textContent =
+    view === 'journal' ? 'Журнал студента' : (view === 'services' ? 'Сервисы' : 'Настройки');
+  if (view === 'services') loadAdminData();
+  if (view === 'settings') renderSettings();
 }
-
-// ── Week render ───────────────────────────────────────────────────────────
-async function renderWeek() {
-  const label = `${MONTH_RU[weekStart.getMonth()]} ${weekStart.getFullYear()} — ${weekNum(weekStart)} неделя`;
-  document.getElementById('week-label').textContent = label;
-
-  const row = document.getElementById('days-row');
-  row.innerHTML = '';
-  const todayIso = isoDate(today);
-  const selIso   = isoDate(selectedDay);
-
-  for (let i = 0; i < 7; i++) {
-    const d   = addDays(weekStart, i);
-    const iso = isoDate(d);
-    const classes = await getSchedule(iso).catch(() => []);
-    const dotCount = Math.min(classes.length, 3);
-
-    const cell = document.createElement('div');
-    cell.className = 'day-cell' +
-      (iso === selIso ? ' active' : '') +
-      (iso === todayIso && iso !== selIso ? ' today' : '');
-    cell.innerHTML = `
-      <span class="day-name">${DAY_SHORT[d.getDay()]}</span>
-      <span class="day-num">${d.getDate()}</span>
-      <div class="day-dots">${'<div class="day-dot"></div>'.repeat(dotCount)}</div>`;
-    cell.onclick = () => selectDay(d);
-    row.appendChild(cell);
+function toggleTheme() {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  localStorage.setItem('queue-theme', next);
+}
+async function loadMe() {
+  me = await apiGet('/api/me').catch(() => me);
+  const profileName = me.user?.full_name || (TG_USER ? `${TG_USER.first_name || ''} ${TG_USER.last_name || ''}`.trim() : 'Гость');
+  document.getElementById('profile-name').textContent = profileName || 'Гость';
+  document.getElementById('group-filter').textContent = me.user?.group_name ? `Группа ${me.user.group_name}` : 'Все группы';
+  document.getElementById('admin-services').classList.toggle('hidden', !me.is_admin);
+  document.getElementById('student-services').classList.toggle('hidden', me.is_admin);
+}
+async function loadMonthCounts() {
+  monthCounts = {};
+  const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+  const start = new Date(first);
+  const shift = (start.getDay() || 7) - 1;
+  start.setDate(start.getDate() - shift);
+  const jobs = [];
+  for (let i = 0; i < 42; i++) {
+    const day = new Date(start);
+    day.setDate(start.getDate() + i);
+    const key = isoDate(day);
+    jobs.push(apiGet(`/api/schedule?date=${key}`).then(data => { monthCounts[key] = (data.classes || []).length; }).catch(() => { monthCounts[key] = 0; }));
+  }
+  await Promise.all(jobs);
+}
+async function renderMonth() {
+  document.getElementById('month-label').textContent = `${MONTHS[cursor.getMonth()]} ${cursor.getFullYear()}`;
+  document.getElementById('week-label').textContent = `${weekNumber(selected)} неделя`;
+  await loadMonthCounts();
+  const grid = document.getElementById('month-grid');
+  grid.innerHTML = WEEKDAYS.map(day => `<div class="weekday">${day}</div>`).join('');
+  const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+  const start = new Date(first);
+  const shift = (start.getDay() || 7) - 1;
+  start.setDate(start.getDate() - shift);
+  for (let i = 0; i < 42; i++) {
+    const day = new Date(start);
+    day.setDate(start.getDate() + i);
+    const key = isoDate(day);
+    const button = document.createElement('button');
+    button.className = `day ${day.getMonth() !== cursor.getMonth() ? 'outside' : ''} ${sameDay(day, today) ? 'today' : ''} ${sameDay(day, selected) ? 'selected' : ''}`;
+    button.innerHTML = `<span>${day.getDate()}</span>${monthCounts[key] ? `<span class="day-count">${monthCounts[key]}</span>` : '<span class="day-count" style="opacity:0">0</span>'}`;
+    button.onclick = () => selectDay(day);
+    grid.appendChild(button);
   }
 }
-
-// ── Day select ────────────────────────────────────────────────────────────
-async function selectDay(d) {
-  selectedDay = new Date(d);
-  scheduleCache = {};    // invalidate cache
-  await renderWeek();
-  await renderClasses();
-}
-
-function changeWeek(dir) {
-  weekStart = addDays(weekStart, dir * 7);
-  selectedDay = new Date(weekStart);
-  renderWeek();
-  renderClasses();
-}
-
-// ── Classes render ────────────────────────────────────────────────────────
 async function renderClasses() {
-  const container = document.getElementById('classes-list');
-  container.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
-
-  const iso     = isoDate(selectedDay);
-  const dayStr  = `${selectedDay.getDate()} ${MONTH_RU2[selectedDay.getMonth()]} ${selectedDay.getFullYear()}`;
-  document.getElementById('date-label').textContent =
-    iso === isoDate(today) ? `сегодня — ${dayStr}` : dayStr;
-  document.getElementById('hdr-sub').textContent =
-    `${MONTH_RU[selectedDay.getMonth()]} ${selectedDay.getFullYear()}`;
-
-  const classes = await getSchedule(iso).catch(() => []);
-  container.innerHTML = '';
-
-  if (classes.length === 0) {
-    container.innerHTML = `
-      <div class="empty">
-        <div class="empty-icon">📭</div>
-        <p>Занятий нет</p>
-      </div>`;
+  const key = isoDate(selected);
+  const label = `${String(selected.getDate()).padStart(2,'0')}.${String(selected.getMonth()+1).padStart(2,'0')}.${selected.getFullYear()}`;
+  document.getElementById('selected-date').textContent = label;
+  const list = document.getElementById('classes-list');
+  list.innerHTML = '<div class="empty">Загрузка расписания</div>';
+  const data = await apiGet(`/api/schedule?date=${key}`).catch(() => ({ classes: [] }));
+  const classes = data.classes || [];
+  document.getElementById('day-summary').textContent = classes.length ? `${classes.length} занятий` : 'Занятий нет';
+  if (!classes.length) {
+    list.innerHTML = '<div class="empty">На выбранную дату занятий нет</div>';
     return;
   }
-
+  list.innerHTML = '';
   for (const cls of classes) {
-    const qStatus = cls.queue_status || 'pending';
-    const qLabel  = { pending:'⏳ Открытие скоро', open:'🟢 Запись открыта',
-                      closed:'🔴 Очередь закрыта', completed:'✅ Завершено' }[qStatus] || '';
-    const qCount  = cls.queue_count ?? 0;
+    const statusText = {
+      pending: 'Запись скоро',
+      open: 'Запись открыта',
+      closed: 'Очередь сформирована',
+      completed: 'Завершено',
+    }[cls.queue_status] || cls.queue_status;
+
+    const canAct = me.authenticated && me.registered;
+    let quickWidget = '';
+    if (canAct) {
+      if (cls.queue_status === 'open') {
+        if (cls.user_in_queue) {
+          quickWidget = `<button class="danger-button card-action-btn" onclick="event.stopPropagation(); quickLeave(${cls.id})">− Выйти</button>`;
+        } else {
+          quickWidget = `<button class="primary-button card-action-btn" onclick="event.stopPropagation(); quickJoin(${cls.id})">+ Записаться</button>`;
+        }
+      } else if (cls.user_in_queue && cls.user_position) {
+        const cat = cls.user_q_category || 'middle';
+        quickWidget = `<span class="pos ${cat}" style="width:26px;height:26px;font-size:12px;flex-shrink:0">${cls.user_position}</span>`;
+      } else if (cls.user_in_queue) {
+        quickWidget = `<span style="font-size:12px;color:var(--green)">✓ В очереди</span>`;
+      }
+    }
 
     const card = document.createElement('div');
     card.className = 'class-card';
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', (e) => { if (!e.target.closest('.card-action-btn')) openClass(cls.id); });
     card.innerHTML = `
       <div class="class-card-top">
-        <span class="time-badge">${cls.time_start} – ${cls.time_end}</span>
-        <span class="type-badge">${cls.type || 'ПР'}</span>
-        <span class="room-badge">${cls.room || ''}</span>
+        <span class="time">${cls.time_start} - ${cls.time_end}</span>
+        <span class="badge">${cls.type || 'ПР'}</span>
+        <span></span>
+        <span class="room">${cls.room || '—'}</span>
       </div>
-      <div class="class-name">${cls.subject_name}</div>
-      <div class="class-meta">
-        <span class="teacher-name">👨‍🏫 ${cls.teacher || '—'}</span>
-        <span class="queue-pill ${qStatus}">
-          ${qLabel}${qCount > 0 ? ` · ${qCount}` : ''}
-        </span>
+      <div class="subject">${escapeHtml(cls.subject_name)}</div>
+      <div class="teacher">
+        <div style="display:flex;align-items:center;gap:8px;min-width:0">
+          ${quickWidget}
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(cls.teacher || '—')}</span>
+        </div>
+        <span class="queue-state ${cls.queue_status}" style="white-space:nowrap;flex-shrink:0">${statusText}${cls.queue_count ? ` · ${cls.queue_count}` : ''}</span>
       </div>`;
-    card.onclick = () => openClassModal(cls.id);
-    container.appendChild(card);
+    list.appendChild(card);
   }
 }
-
-// ── Modal ─────────────────────────────────────────────────────────────────
-async function openClassModal(classId) {
-  const overlay = document.getElementById('modal-overlay');
-  const body    = document.getElementById('modal-body');
-  overlay.classList.add('visible');
-  body.innerHTML = '<div class="spinner-wrap"><div class="spinner"></div></div>';
-
-  const data = await getQueueDetail(classId).catch(() => null);
-  if (!data) { body.innerHTML = '<p style="color:var(--red)">Ошибка загрузки</p>'; return; }
-
-  currentQueue = data;
-  renderModal(data);
-}
-
-function renderModal(data) {
-  const body    = document.getElementById('modal-body');
-  const qStatus = data.queue?.status || 'pending';
-  const entries = data.queue?.entries || [];
-  const inQueue = entries.some(e => e.telegram_id === ME.id);
-  const myEntry = entries.find(e => e.telegram_id === ME.id);
-
-  // Assignments
-  let asgnsHtml = '';
-  if (data.assignments?.length) {
-    asgnsHtml = `<div class="section-title">📝 Задания</div>`;
-    for (const a of data.assignments) {
-      const dl  = a.deadline ? `<div class="asgn-dl">⏰ Дедлайн: ${fmtDt(a.deadline)}</div>` : '';
-      const url = a.url ? `<a class="asgn-link" href="${a.url}" target="_blank">🔗 Открыть задание</a>` : '';
-      asgnsHtml += `
-        <div class="asgn-card">
-          <div class="asgn-title">${a.title}</div>
-          ${a.description ? `<div class="asgn-desc">${a.description}</div>` : ''}
-          ${dl}${url}
-        </div>`;
-    }
-  }
-
-  // Queue entries
-  let qEntriesHtml = '';
-  if (entries.length) {
-    qEntriesHtml = entries.map(e => {
-      const pos  = e.position ?? '—';
-      const cat  = e.q_category || 'middle';
-      const sub  = e.submitted ? (e.on_time ? '✅' : '⏰') : '—';
-      const isMe = e.telegram_id === ME.id;
-      return `
-        <div class="q-entry">
-          <div class="q-pos ${cat}">${pos}</div>
-          <div>
-            <div class="q-name">${e.full_name}${isMe ? ' <span style="color:var(--accent);font-size:11px;">● вы</span>' : ''}</div>
-            <div class="q-cat">${catLabel(cat)}</div>
-          </div>
-          <div class="q-sub">${sub}</div>
-        </div>`;
-    }).join('');
-  }
-
-  const qStatusLabels = {
-    pending:   '⏳ Запись ещё не открыта',
-    open:      '🟢 Запись открыта!',
-    closed:    '🔴 Очередь сформирована',
-    completed: '✅ Пара завершена',
-  };
-
-  // Action button
-  let btnHtml = '';
-  if (qStatus === 'open') {
-    if (inQueue) {
-      btnHtml = `<button class="action-btn leave" onclick="doLeave(${data.class_id})">❌ Выйти из очереди</button>`;
-    } else {
-      btnHtml = `<button class="action-btn join" onclick="doJoin(${data.class_id})">✅ Записаться в очередь</button>`;
-    }
+async function quickJoin(classId) {
+  const result = await apiPost(`/api/queue/${classId}/join`);
+  if (result.status === 'ok' || result.status === 'already_in') {
+    showToast('Вы записаны в очередь!');
   } else {
-    btnHtml = `<button class="action-btn disabled-look" disabled>${qStatusLabels[qStatus]}</button>`;
+    showToast(result.error || 'Ошибка');
   }
-
-  // My position hint
-  let myPosHtml = '';
-  if (myEntry && myEntry.position) {
-    myPosHtml = `<div style="text-align:center;font-size:12px;color:var(--subtext);margin-top:8px;">
-      Ваша позиция: <strong>#${myEntry.position}</strong> · ${catLabel(myEntry.q_category || 'middle')}
-    </div>`;
-  }
-
-  body.innerHTML = `
-    <div class="modal-subject">${data.subject_name}</div>
-    <div class="modal-teacher">👨‍🏫 ${data.teacher || '—'}</div>
-
-    <div class="info-row">🕐 Время <span class="val">${data.time_start} – ${data.time_end}</span></div>
-    <div class="info-row">🚪 Аудитория <span class="val">${data.room || '—'}</span></div>
-
-    ${asgnsHtml}
-
-    <div class="section-title">🎫 Очередь</div>
-    <div class="queue-status-bar ${qStatus}">
-      ${qStatusLabels[qStatus]}
-      ${entries.length ? `<span class="q-count">${entries.length} чел.</span>` : ''}
-    </div>
-    ${qEntriesHtml}
-    ${btnHtml}
-    ${myPosHtml}
-  `;
-}
-
-async function doJoin(classId) {
-  const btn = document.querySelector('.action-btn');
-  if (btn) btn.disabled = true;
-  const r = await joinQueue(classId).catch(() => null);
-  if (r?.status === 'ok') {
-    showToast('✅ Вы записаны в очередь!');
-    scheduleCache = {};
-    const data = await getQueueDetail(classId);
-    currentQueue = data;
-    renderModal(data);
-    renderClasses();
-  } else {
-    showToast(r?.error || '⚠️ Ошибка');
-    if (btn) btn.disabled = false;
-  }
-}
-
-async function doLeave(classId) {
-  const btn = document.querySelector('.action-btn');
-  if (btn) btn.disabled = true;
-  const r = await leaveQueue(classId).catch(() => null);
-  if (r?.status === 'ok') {
-    showToast('Вы вышли из очереди');
-    scheduleCache = {};
-    const data = await getQueueDetail(classId);
-    currentQueue = data;
-    renderModal(data);
-    renderClasses();
-  } else {
-    showToast('⚠️ Ошибка');
-    if (btn) btn.disabled = false;
-  }
-}
-
-function hideModal() {
-  document.getElementById('modal-overlay').classList.remove('visible');
-}
-function closeModal(e) {
-  if (e.target === document.getElementById('modal-overlay')) hideModal();
-}
-
-// ── Utils ─────────────────────────────────────────────────────────────────
-function catLabel(cat) {
-  return { good:'🟢 Добросовестный', middle:'🟡 Средний', poor:'🔴 Отстающий' }[cat] || cat;
-}
-function fmtDt(s) {
-  try {
-    const d = new Date(s);
-    return `${d.getDate().toString().padStart(2,'0')}.${(d.getMonth()+1).toString().padStart(2,'0')}.${d.getFullYear()} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
-  } catch { return s; }
-}
-function showToast(msg) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  clearTimeout(t._timer);
-  t._timer = setTimeout(() => t.classList.remove('show'), 2500);
-}
-
-// ── Init ──────────────────────────────────────────────────────────────────
-(async () => {
-  await renderWeek();
   await renderClasses();
-  setInterval(() => { scheduleCache = {}; renderClasses(); }, 15000);
+  await renderMonth();
+}
+async function quickLeave(classId) {
+  const result = await apiPost(`/api/queue/${classId}/leave`);
+  showToast(result.status === 'ok' ? 'Вы вышли из очереди' : (result.error || 'Ошибка'));
+  await renderClasses();
+  await renderMonth();
+}
+async function selectDay(day) {
+  selected = new Date(day);
+  if (cursor.getMonth() !== selected.getMonth() || cursor.getFullYear() !== selected.getFullYear()) {
+    cursor = new Date(selected.getFullYear(), selected.getMonth(), 1);
+  }
+  await renderMonth();
+  await renderClasses();
+}
+async function changeMonth(delta) {
+  cursor = new Date(cursor.getFullYear(), cursor.getMonth() + delta, 1);
+  selected = new Date(cursor.getFullYear(), cursor.getMonth(), Math.min(selected.getDate(), 28));
+  await renderMonth();
+  await renderClasses();
+}
+async function openClass(id) {
+  const data = await apiGet(`/api/queue/${id}`).catch(() => null);
+  if (!data || data.error) { showToast(data?.error || 'Не удалось открыть занятие'); return; }
+  currentDetail = data;
+  document.getElementById('modal-title').textContent = data.subject_name;
+  document.getElementById('modal-subtitle').textContent = `${data.date.split('-').reverse().join('.')} · ${data.group_name || 'общая группа'}`;
+  renderModalBody(data);
+  document.getElementById('modal-backdrop').classList.add('visible');
+}
+function renderModalBody(data) {
+  const entries = data.queue?.entries || [];
+  const inQueue = entries.some(entry => me.user && entry.telegram_id === me.user.telegram_id);
+  const status = data.queue?.status || 'pending';
+  const assignments = data.assignments || [];
+  let action = '';
+  if (!me.authenticated) {
+    action = '<button class="plain-button" disabled>Откройте из Telegram</button>';
+  } else if (!me.registered) {
+    action = '<button class="plain-button" disabled>Напишите /start боту</button>';
+  } else if (status === 'open') {
+    action = inQueue
+      ? `<button class="danger-button" onclick="leaveQueue(${data.class_id})">Выйти из очереди</button>`
+      : `<button class="primary-button" onclick="joinQueue(${data.class_id})">Записаться</button>`;
+  } else {
+    action = `<button class="plain-button" disabled>${statusLabel(status)}</button>`;
+  }
+  const adminActions = me.is_admin && data.queue?.id ? `
+    <div class="section-title">Администрирование</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="primary-button" onclick="queueAction(${data.queue.id}, 'open')">Открыть</button>
+      <button class="plain-button" onclick="queueAction(${data.queue.id}, 'close')">Сформировать</button>
+      <button class="plain-button" onclick="queueAction(${data.queue.id}, 'completed')">Завершить</button>
+    </div>` : '';
+  document.getElementById('modal-body').innerHTML = `
+    <div class="meta-grid">
+      <div class="meta"><span>Время</span><strong>${data.time_start} - ${data.time_end}</strong></div>
+      <div class="meta"><span>Аудитория</span><strong>${data.room || '—'}</strong></div>
+      <div class="meta"><span>Преподаватель</span><strong>${escapeHtml(data.teacher || '—')}</strong></div>
+    </div>
+    ${assignments.length ? `<div class="section-title">Задания</div>${assignments.map(renderAssignment).join('')}` : ''}
+    <div class="section-title">Очередь</div>
+    <div class="meta"><span>Статус</span><strong>${statusLabel(status)}${entries.length ? ` · ${entries.length} чел.` : ''}</strong></div>
+    <div style="height:10px"></div>
+    ${entries.length ? entries.map(entry => renderEntry(entry, data.queue.id)).join('') : '<div class="empty">В очереди пока никого нет</div>'}
+    <div style="margin-top:14px">${action}</div>
+    ${adminActions}`;
+}
+function renderAssignment(item) {
+  return `<div class="assignment">
+    <strong>${escapeHtml(item.title)}</strong>
+    ${item.description ? `<div class="muted">${escapeHtml(item.description)}</div>` : ''}
+    ${item.deadline ? `<div class="muted">Дедлайн: ${formatDateTime(item.deadline)}</div>` : ''}
+    ${item.url ? `<a href="${escapeAttr(item.url)}" target="_blank" style="color:var(--blue)">Открыть материал</a>` : ''}
+  </div>`;
+}
+function renderEntry(entry, queueId) {
+  const cat = entry.q_category || entry.user_cat || 'middle';
+  const mark = entry.submitted ? (entry.on_time ? '✅' : '⏰') : '—';
+  const admin = me.is_admin ? `<div class="entry-actions">
+    <button class="small-action" onclick="markSubmission(${queueId}, ${entry.user_id}, 'on_time')">✅</button>
+    <button class="small-action" onclick="markSubmission(${queueId}, ${entry.user_id}, 'late')">⏰</button>
+    <button class="small-action" onclick="markSubmission(${queueId}, ${entry.user_id}, 'no_show')">❌</button>
+  </div>` : `<span>${mark}</span>`;
+  return `<div class="entry">
+    <div class="pos ${cat}">${entry.position || '—'}</div>
+    <div><strong>${escapeHtml(entry.full_name)}</strong><div class="muted">${catLabel(cat)}${entry.group_name ? ` · ${escapeHtml(entry.group_name)}` : ''}</div></div>
+    ${admin}
+  </div>`;
+}
+async function joinQueue(classId) {
+  const result = await apiPost(`/api/queue/${classId}/join`);
+  showToast(result.status === 'ok' || result.status === 'already_in' ? 'Запись обновлена' : (result.error || 'Ошибка'));
+  await openClass(classId);
+  await renderClasses();
+  await renderMonth();
+}
+async function leaveQueue(classId) {
+  const result = await apiPost(`/api/queue/${classId}/leave`);
+  showToast(result.status === 'ok' ? 'Вы вышли из очереди' : (result.error || 'Ошибка'));
+  await openClass(classId);
+  await renderClasses();
+  await renderMonth();
+}
+async function queueAction(queueId, action) {
+  const result = await apiPost(`/api/admin/queue/${queueId}/${action}`);
+  showToast(result.status === 'ok' ? 'Очередь обновлена' : (result.error || 'Ошибка'));
+  if (currentDetail) await openClass(currentDetail.class_id);
+  await renderClasses();
+  await renderMonth();
+}
+async function markSubmission(queueId, userId, kind) {
+  const result = await apiPost('/api/admin/mark', { queue_id: queueId, user_id: userId, kind });
+  showToast(result.status === 'ok' ? 'Сдача отмечена' : (result.error || 'Ошибка'));
+  if (currentDetail) await openClass(currentDetail.class_id);
+}
+async function loadAdminData() {
+  if (!me.is_admin) return;
+  const data = await apiGet('/api/admin/subjects').catch(() => ({ subjects: [] }));
+  adminSubjects = data.subjects || [];
+  const select = document.getElementById('class-subject');
+  select.innerHTML = adminSubjects.map(s => `<option value="${s.id}">${escapeHtml(s.name)}${s.group_name ? ` [${escapeHtml(s.group_name)}]` : ''}</option>`).join('');
+  document.getElementById('admin-subjects').innerHTML = adminSubjects.length
+    ? adminSubjects.map(s => `<div class="subject-row"><span><strong>${escapeHtml(s.name)}</strong><br><span class="muted">${escapeHtml(s.group_name || 'общий предмет')}</span></span><span>#${s.id}</span></div>`).join('')
+    : '<div class="empty">Предметов пока нет</div>';
+}
+async function createSubject() {
+  const name = document.getElementById('new-subject-name').value.trim();
+  const group = document.getElementById('new-subject-group').value.trim();
+  if (!name) { showToast('Введите название'); return; }
+  const result = await apiPost('/api/admin/subjects', { name, group_name: group || null });
+  showToast(result.status === 'ok' ? 'Предмет добавлен' : (result.error || 'Ошибка'));
+  document.getElementById('new-subject-name').value = '';
+  await loadAdminData();
+}
+async function createClass() {
+  const body = {
+    subject_id: document.getElementById('class-subject').value,
+    dt: `${document.getElementById('class-date').value}T${document.getElementById('class-time').value}:00`,
+    duration_minutes: Number(document.getElementById('class-duration').value || 90),
+    room: document.getElementById('class-room').value.trim(),
+    teacher: document.getElementById('class-teacher').value.trim(),
+  };
+  if (!body.subject_id || !document.getElementById('class-date').value) { showToast('Заполните предмет и дату'); return; }
+  const result = await apiPost('/api/admin/classes', body);
+  showToast(result.status === 'ok' ? 'Пара создана' : (result.error || 'Ошибка'));
+  await renderClasses();
+  await renderMonth();
+}
+function renderSettings() {
+  const user = me.user;
+  document.getElementById('settings-body').innerHTML = `
+    <h2>Профиль</h2>
+    <div class="meta-grid">
+      <div class="meta"><span>Статус</span><strong>${me.authenticated ? 'Telegram WebApp' : 'Гостевой просмотр'}</strong></div>
+      <div class="meta"><span>ФИО</span><strong>${escapeHtml(user?.full_name || 'Не зарегистрирован')}</strong></div>
+      <div class="meta"><span>Группа</span><strong>${escapeHtml(user?.group_name || '—')}</strong></div>
+    </div>
+    <div class="meta-grid">
+      <div class="meta"><span>Рейтинг</span><strong>${user ? `${user.rating}/100` : '—'}</strong></div>
+      <div class="meta"><span>Вовремя</span><strong>${user?.on_time ?? '—'}</strong></div>
+      <div class="meta"><span>Не сдал</span><strong>${user?.no_show ?? '—'}</strong></div>
+    </div>`;
+}
+function closeModal() {
+  document.getElementById('modal-backdrop').classList.remove('visible');
+}
+function backdropClose(event) {
+  if (event.target.id === 'modal-backdrop') closeModal();
+}
+function statusLabel(status) {
+  return { pending:'Запись ещё не открыта', open:'Запись открыта', closed:'Очередь сформирована', completed:'Пара завершена' }[status] || status;
+}
+function catLabel(cat) {
+  return { good:'Добросовестный', middle:'Средний', poor:'Отстающий' }[cat] || cat;
+}
+function formatDateTime(value) {
+  const d = new Date(value);
+  return `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}.${d.getFullYear()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+function showQrStub() {
+  showToast('QR-сканер подключается через Telegram-клиент');
+}
+function showToast(message) {
+  const toast = document.getElementById('toast');
+  toast.textContent = message;
+  toast.classList.add('visible');
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => toast.classList.remove('visible'), 2300);
+}
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]));
+}
+function escapeAttr(value) {
+  return escapeHtml(value).replace(/`/g, '&#96;');
+}
+(async function init() {
+  document.getElementById('class-date').value = isoDate(today);
+  await loadMe();
+  await renderMonth();
+  await renderClasses();
+  renderSettings();
 })();
 </script>
 </body>

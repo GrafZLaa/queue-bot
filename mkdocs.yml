@@ -47,6 +47,10 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Project:
+    - Requirements: project/requirements.md
+    - Architecture: project/architecture.md
+    - Defense: project/defense.md
   - API Reference:
     - Bot: api/bot.md
   - Guide:

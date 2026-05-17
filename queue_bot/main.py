@@ -1,6 +1,7 @@
 """Application entry point for the Queue Bot package."""
 
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -8,132 +9,160 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
-    CallbackQuery, InlineKeyboardButton,
-    InlineKeyboardMarkup, Message, WebAppInfo
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    WebAppInfo,
 )
-from aiohttp import web
 from dotenv import load_dotenv
 
 from . import database as db
+from .webapp_auth import WebAppAuthError, validate_init_data
 
 load_dotenv()
 
-TOKEN     = os.getenv("BOT_TOKEN", "")
+TOKEN = os.getenv("BOT_TOKEN", "")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
-PORT      = int(os.getenv("PORT", "3000"))
-WEB_URL   = os.getenv("WEB_URL", f"http://localhost:{PORT}")
+PORT = int(os.getenv("PORT", "3000"))
+WEB_URL = os.getenv("WEB_URL", f"http://localhost:{PORT}")
+ALLOW_UNVERIFIED_WEBAPP = os.getenv("ALLOW_UNVERIFIED_WEBAPP", "0") == "1"
 PACKAGE_DIR = Path(__file__).resolve().parent
 INDEX_HTML = PACKAGE_DIR / "index.html"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
 
-dp  = Dispatcher(storage=MemoryStorage())
+dp = Dispatcher(storage=MemoryStorage())
 
-
-# ── FSM ───────────────────────────────────────────────────────────────────────
-class Form(StatesGroup):
-    """
-    Группа состояний (FSM) для пошагового ввода данных пользователем:
-    создание предметов, пар, заданий, регистрация и редактирование профиля.
-    """
-    subj_name   = State()
-    subj_group  = State()
-    cls_dt      = State()
-    cls_room    = State()
-    cls_teacher = State()
-    asgn_title  = State()
-    asgn_desc   = State()
-    asgn_dl     = State()
-    asgn_url    = State()
-    edit_rating = State()
-    edit_name   = State()
-    register    = State()
-
-
-CAT_EMOJI  = {"good": "🟢", "middle": "🟡", "poor": "🔴"}
-CAT_LABEL  = {"good": "Добросовестный", "middle": "Средний", "poor": "Отстающий"}
+CAT_EMOJI = {"good": "🟢", "middle": "🟡", "poor": "🔴"}
+CAT_LABEL = {"good": "Добросовестный", "middle": "Средний", "poor": "Отстающий"}
 STAT_EMOJI = {"pending": "⏳", "open": "🟢", "closed": "🔴", "completed": "✅"}
+STAT_LABEL = {
+    "pending": "запись ещё не открыта",
+    "open": "запись открыта",
+    "closed": "очередь сформирована",
+    "completed": "пара завершена",
+}
 
 
-def kb(*rows):
-    """Build an inline keyboard from preassembled button rows."""
+class Form(StatesGroup):
+    """FSM states for Telegram registration and admin data entry."""
+
+    register_name = State()
+    register_group = State()
+    subj_name = State()
+    subj_group = State()
+    cls_dt = State()
+    cls_duration = State()
+    cls_room = State()
+    cls_teacher = State()
+    asgn_title = State()
+    asgn_desc = State()
+    asgn_dl = State()
+    asgn_url = State()
+    edit_rating = State()
+    edit_name = State()
+    edit_group = State()
+
+
+def kb(*rows: list[InlineKeyboardButton]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=list(rows))
 
 
-def btn(text, data):
-    """Create a callback button with the provided label and callback data."""
+def btn(text: str, data: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=text, callback_data=data)
 
 
 def parse_dt(text: str) -> Optional[str]:
-    """
-    Пытается распарсить строку даты в формат ISO.
-    
-    Args:
-        text: Строка с датой (например, "26.03.2025 14:30").
-    
-    Returns:
-        ISO-строку даты или None, если формат не распознан.
-    """
-    fmts = ["%d.%m.%Y %H:%M", "%d.%m %H:%M", "%Y-%m-%d %H:%M"]
-    for f in fmts:
+    """Parse common Russian class date formats into ISO datetime."""
+    for fmt in ("%d.%m.%Y %H:%M", "%d.%m %H:%M", "%Y-%m-%d %H:%M"):
         try:
-            dt = datetime.strptime(text.strip(), f)
-            if dt.year == 1900:
-                dt = dt.replace(year=datetime.now().year)
-            return dt.isoformat()
+            parsed = datetime.strptime(text.strip(), fmt)
+            if parsed.year == 1900:
+                parsed = parsed.replace(year=datetime.now().year)
+            return parsed.isoformat()
         except ValueError:
             continue
     return None
 
 
-def fmt_dt(s: str) -> str:
-    """
-    Преобразует ISO-строку в читаемый формат.
-    
-    Args:
-        s: ISO-строка даты (например, "2025-03-26T14:30:00")
-    
-    Returns:
-        Строка в формате "ДД.ММ.ГГГГ ЧЧ:ММ"
-    
-    Example:
-        >>> fmt_dt("2025-03-26T14:30:00")
-        '26.03.2025 14:30'
-    """
+def parse_duration(text: str) -> Optional[int]:
+    value = text.strip()
+    if value == "-":
+        return db.DEFAULT_DURATION_MINUTES
     try:
-        return datetime.fromisoformat(s).strftime("%d.%m.%Y %H:%M")
-    except: 
-        return s
+        minutes = int(value)
+    except ValueError:
+        return None
+    if minutes < 15 or minutes > 360:
+        return None
+    return minutes
 
 
-def fmt_user(u: dict) -> str:
-    """Форматирует информацию о пользователе для отображения в Telegram"""
-    cat = CAT_EMOJI[u["category"]] + " " + CAT_LABEL[u["category"]]
+def fmt_dt(value: str) -> str:
+    try:
+        return datetime.fromisoformat(value).strftime("%d.%m.%Y %H:%M")
+    except ValueError:
+        return value
+
+
+def class_times(cls: dict) -> tuple[str, str]:
+    start = datetime.fromisoformat(cls["dt"])
+    end = db.class_end_time(cls["dt"], cls.get("duration_minutes"))
+    return start.strftime("%H:%M"), end.strftime("%H:%M")
+
+
+def fmt_class_line(cls: dict) -> str:
+    start, end = class_times(cls)
+    return f"{fmt_dt(cls['dt'])} - {end} ({cls.get('duration_minutes') or 90} мин.)"
+
+
+def fmt_user(user: dict) -> str:
+    cat = f"{CAT_EMOJI[user['category']]} {CAT_LABEL[user['category']]}"
+    group = user.get("group_name") or "не указана"
     return (
-        f"👤 *{u['full_name']}*\n"
-        f"⭐ Рейтинг: `{u['rating']}/100`\n"
+        f"👤 *{user['full_name']}*\n"
+        f"🎓 Группа: `{group}`\n"
+        f"⭐ Рейтинг: `{user['rating']}/100`\n"
         f"Категория: {cat}\n"
-        f"✅ Вовремя: {u['on_time']}  ⏰ Поздно: {u['late']}  ❌ Не сдал: {u['no_show']}"
+        f"✅ Вовремя: {user['on_time']}  ⏰ Поздно: {user['late']}  ❌ Не сдал: {user['no_show']}"
     )
 
 
-def main_menu_kb(tg_id: int):
-    """
-    Формирует главное меню (кнопки для веб-аппа, рейтинга и админки).
-    
-    Args:
-        tg_id: Telegram ID текущего пользователя.
-    """
+async def notify_queue_open(bot: Bot, class_id: int) -> None:
+    """Notify all students in a class group that the queue has opened."""
+    cls = await db.get_class(class_id)
+    if not cls:
+        return
+    users = await db.all_users(cls.get("group_name"))
+    start_str = fmt_dt(cls["dt"])
+    for u in users:
+        try:
+            await bot.send_message(
+                u["telegram_id"],
+                f"🟢 *Открыта запись в очередь!*\n\n"
+                f"📖 {cls['subject_name']}\n"
+                f"📅 {start_str}\n"
+                f"🚪 {cls.get('room') or '—'}\n\n"
+                f"Откройте журнал занятий, чтобы записаться.",
+                parse_mode="Markdown",
+            )
+        except Exception:
+            log.exception("Cannot notify student tg_id=%s", u["telegram_id"])
+
+
+def main_menu_kb(tg_id: int) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text="📅 Открыть расписание", web_app=WebAppInfo(url=WEB_URL))],
+        [InlineKeyboardButton(text="📅 Открыть журнал занятий", web_app=WebAppInfo(url=WEB_URL))],
         [btn("📊 Мой рейтинг", "my_rating"), btn("🏆 Лидерборд", "leaderboard")],
     ]
     if tg_id in ADMIN_IDS:
@@ -141,559 +170,1028 @@ def main_menu_kb(tg_id: int):
     return kb(*rows)
 
 
-# ── /start ────────────────────────────────────────────────────────────────────
+def is_admin_id(tg_id: int) -> bool:
+    return tg_id in ADMIN_IDS
+
+
+def is_admin(cq: CallbackQuery) -> bool:
+    return is_admin_id(cq.from_user.id)
+
+
 @dp.message(Command("start"))
-async def cmd_start(msg: Message, state: FSMContext):
-    """Хэндлер команды /start: регистрация новых пользователей или вход."""
-    u = msg.from_user
-    existing = await db.get_user_by_tg(u.id)
+async def cmd_start(msg: Message, state: FSMContext) -> None:
+    user = msg.from_user
+    existing = await db.get_user_by_tg(user.id)
     if not existing:
-        # New user — ask for full name
-        await state.set_state(Form.register)
+        await state.set_state(Form.register_name)
         await msg.answer(
-            "👋 *Добро пожаловать!*\n\n"
-            "Для регистрации введите ваше *ФИО* (Фамилия Имя Отчество):\n"
-            "_Например: Иванов Иван Иванович_",
-            parse_mode="Markdown"
+            "👋 Добро пожаловать!\n\nВведите ФИО, чтобы зарегистрироваться в журнале очередей."
         )
-    else:
-        await msg.answer(
-            f"👋 *{existing['full_name']}*, добро пожаловать!\n\nОткрой расписание:",
-            reply_markup=main_menu_kb(u.id), parse_mode="Markdown"
-        )
+        return
+
+    if not existing.get("group_name"):
+        await state.update_data(full_name=existing["full_name"])
+        await state.set_state(Form.register_group)
+        await msg.answer("Укажите учебную группу, например `ИКБО-01-23`:", parse_mode="Markdown")
+        return
+
+    await msg.answer(
+        f"👋 *{existing['full_name']}*, добро пожаловать!\n\n"
+        f"Используйте /myqueue для проверки своей позиции в очереди.",
+        reply_markup=main_menu_kb(user.id),
+        parse_mode="Markdown",
+    )
 
 
-@dp.message(Form.register)
-async def fsm_register(msg: Message, state: FSMContext):
-    """Хэндлер процесса регистрации (запрос и сохранение ФИО)."""
+@dp.message(Command("myqueue"))
+async def cmd_myqueue(msg: Message) -> None:
+    user = await db.get_user_by_tg(msg.from_user.id)
+    if not user:
+        await msg.answer("Напишите /start для регистрации.")
+        return
+    entries = await db.user_active_entries(user["id"])
+    if not entries:
+        await msg.answer(
+            "📭 У вас нет активных записей в очереди.\n\nОткройте журнал занятий, чтобы записаться.",
+            reply_markup=main_menu_kb(msg.from_user.id),
+        )
+        return
+    lines = ["📋 *Ваши активные записи:*\n"]
+    for entry in entries:
+        status_emoji = STAT_EMOJI.get(entry["queue_status"], "⏳")
+        pos_text = f"позиция *{entry['position']}*" if entry.get("position") else "позиция не определена"
+        cat = entry.get("q_category") or "middle"
+        cat_text = f"{CAT_EMOJI[cat]} {CAT_LABEL[cat]}"
+        start = fmt_dt(entry["dt"])
+        room = entry.get("room") or "—"
+        lines.append(
+            f"{status_emoji} *{entry['subject_name']}*\n"
+            f"📅 {start} · 🚪 {room}\n"
+            f"📌 {pos_text} · {cat_text}"
+        )
+    await msg.answer(
+        "\n\n".join(lines),
+        reply_markup=main_menu_kb(msg.from_user.id),
+        parse_mode="Markdown",
+    )
+
+
+@dp.message(Form.register_name)
+async def fsm_register_name(msg: Message, state: FSMContext) -> None:
     name = msg.text.strip()
     if len(name.split()) < 2:
-        await msg.answer("❌ Введите Фамилию и Имя (минимум 2 слова):")
+        await msg.answer("Введите фамилию и имя минимум из двух слов:")
         return
-    u = msg.from_user
-    await db.ensure_user(u.id, u.username, name)
+    await state.update_data(full_name=name)
+    await state.set_state(Form.register_group)
+    await msg.answer("Укажите учебную группу, например `ИКБО-01-23`:", parse_mode="Markdown")
+
+
+@dp.message(Form.register_group)
+async def fsm_register_group(msg: Message, state: FSMContext) -> None:
+    group = msg.text.strip().upper()
+    if len(group) < 3:
+        await msg.answer("Группа выглядит слишком короткой. Введите ещё раз:")
+        return
+    data = await state.get_data()
+    tg_user = msg.from_user
+    user = await db.ensure_user(tg_user.id, tg_user.username, data["full_name"], group)
     await state.clear()
     await msg.answer(
-        f"✅ Вы зарегистрированы как *{name}*!\n\nОткрой расписание:",
-        reply_markup=main_menu_kb(u.id), parse_mode="Markdown"
+        f"✅ Вы зарегистрированы как *{user['full_name']}*, группа `{user['group_name']}`.",
+        reply_markup=main_menu_kb(tg_user.id),
+        parse_mode="Markdown",
     )
 
 
 @dp.callback_query(F.data == "main_menu")
-async def cb_main(cq: CallbackQuery):
-    """Хэндлер возврата в главное меню."""
+async def cb_main(cq: CallbackQuery) -> None:
     await cq.answer()
-    await cq.message.edit_text("👋 *Журнал очереди*",
-        reply_markup=main_menu_kb(cq.from_user.id), parse_mode="Markdown")
+    await cq.message.edit_text(
+        "📋 *Журнал очередей*",
+        reply_markup=main_menu_kb(cq.from_user.id),
+        parse_mode="Markdown",
+    )
 
 
 @dp.callback_query(F.data == "my_rating")
-async def cb_rating(cq: CallbackQuery):
-    """Хэндлер отображения рейтинга текущего пользователя."""
+async def cb_rating(cq: CallbackQuery) -> None:
     await cq.answer()
-    u = await db.get_user_by_tg(cq.from_user.id)
-    await cq.message.edit_text(fmt_user(u) if u else "Напишите /start",
-        reply_markup=kb([btn("◀️ Назад","main_menu")]), parse_mode="Markdown")
+    user = await db.get_user_by_tg(cq.from_user.id)
+    await cq.message.edit_text(
+        fmt_user(user) if user else "Напишите /start для регистрации.",
+        reply_markup=kb([btn("◀️ Назад", "main_menu")]),
+        parse_mode="Markdown",
+    )
 
 
 @dp.callback_query(F.data == "leaderboard")
-async def cb_lb(cq: CallbackQuery):
-    """Хэндлер отображения топ-20 студентов по рейтингу."""
+async def cb_leaderboard(cq: CallbackQuery) -> None:
     await cq.answer()
     users = (await db.all_users())[:20]
-    medals = {1:"🥇",2:"🥈",3:"🥉"}
+    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
     lines = ["🏆 *Топ студентов*\n"]
-    for i, u in enumerate(users, 1):
-        lines.append(f"{medals.get(i,f'`{i:>2}.`')} {CAT_EMOJI[u['category']]} *{u['full_name']}* — {u['rating']}/100")
-    await cq.message.edit_text("\n".join(lines),
-        reply_markup=kb([btn("◀️ Назад","main_menu")]), parse_mode="Markdown")
+    for i, user in enumerate(users, 1):
+        group = f" `{user['group_name']}`" if user.get("group_name") else ""
+        lines.append(
+            f"{medals.get(i, f'`{i:>2}.`')} {CAT_EMOJI[user['category']]} "
+            f"*{user['full_name']}*{group} - {user['rating']}/100"
+        )
+    await cq.message.edit_text(
+        "\n".join(lines),
+        reply_markup=kb([btn("◀️ Назад", "main_menu")]),
+        parse_mode="Markdown",
+    )
 
-
-# ── Admin ─────────────────────────────────────────────────────────────────────
-def is_admin(cq):
-    """Check whether the callback author is listed as an administrator."""
-    return cq.from_user.id in ADMIN_IDS
 
 @dp.callback_query(F.data == "admin")
-async def cb_admin(cq: CallbackQuery):
-    """Хэндлер входа в админ-панель."""
-    if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
+async def cb_admin(cq: CallbackQuery) -> None:
+    if not is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
     await cq.answer()
-    await cq.message.edit_text("⚙️ *Админ-панель*", reply_markup=kb(
-        [btn("📚 Предметы","adm_subjects")],
-        [btn("👥 Студенты","adm_users")],
-        [btn("◀️ Назад","main_menu")]
-    ), parse_mode="Markdown")
+    await cq.message.edit_text(
+        "⚙️ *Админ-панель*",
+        reply_markup=kb(
+            [btn("📚 Предметы и пары", "adm_subjects")],
+            [btn("👥 Студенты", "adm_users")],
+            [btn("◀️ Назад", "main_menu")],
+        ),
+        parse_mode="Markdown",
+    )
+
+
+async def render_subjects(message: Message) -> None:
+    subjects = await db.all_subjects()
+    rows = []
+    for subject in subjects:
+        group = f" [{subject['group_name']}]" if subject.get("group_name") else ""
+        rows.append(
+            [
+                btn(f"📖 {subject['name']}{group}", f"adm_subj_{subject['id']}"),
+                btn("🗑", f"adm_delsubj_{subject['id']}"),
+            ]
+        )
+    rows += [[btn("➕ Добавить предмет", "adm_newsubj")], [btn("◀️ Назад", "admin")]]
+    await message.edit_text("📚 *Предметы*", reply_markup=kb(*rows), parse_mode="Markdown")
 
 
 @dp.callback_query(F.data == "adm_subjects")
-async def cb_adm_subjects(cq: CallbackQuery):
-    """Хэндлер списка предметов в админке."""
-    if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
+async def cb_adm_subjects(cq: CallbackQuery) -> None:
+    if not is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
     await cq.answer()
-    subjects = await db.all_subjects()
-    rows = []
-    for s in subjects:
-        grp = f" [{s['group_name']}]" if s.get("group_name") else ""
-        rows.append([btn(f"📖 {s['name']}{grp}",f"adm_subj_{s['id']}"),btn("🗑",f"adm_delsubj_{s['id']}")])
-    rows += [[btn("➕ Добавить предмет","adm_newsubj")],[btn("◀️ Назад","admin")]]
-    await cq.message.edit_text("📚 *Предметы*", reply_markup=kb(*rows), parse_mode="Markdown")
+    await render_subjects(cq.message)
 
 
 @dp.callback_query(F.data == "adm_newsubj")
-async def cb_adm_newsubj(cq: CallbackQuery, state: FSMContext):
-    """Хэндлер начала процесса добавления предмета."""
-    if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
-    await cq.answer(); await state.set_state(Form.subj_name)
-    await cq.message.edit_text("📖 Название предмета:", reply_markup=kb([btn("❌ Отмена","adm_subjects")]))
+async def cb_adm_newsubj(cq: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    await cq.answer()
+    await state.set_state(Form.subj_name)
+    await cq.message.edit_text(
+        "Название предмета:",
+        reply_markup=kb([btn("❌ Отмена", "adm_subjects")]),
+    )
 
 
 @dp.message(Form.subj_name)
-async def fsm_subj_name(msg: Message, state: FSMContext):
-    """Сохраняет имя предмета и запрашивает группу."""
-    await state.update_data(name=msg.text.strip()); await state.set_state(Form.subj_group)
-    await msg.answer("Группа (или `-`):")
+async def fsm_subj_name(msg: Message, state: FSMContext) -> None:
+    await state.update_data(name=msg.text.strip())
+    await state.set_state(Form.subj_group)
+    await msg.answer("Группа предмета или `-`, если предмет общий:", parse_mode="Markdown")
 
 
 @dp.message(Form.subj_group)
-async def fsm_subj_group(msg: Message, state: FSMContext):
-    """Сохраняет группу и завершает создание предмета в БД."""
-    d = await state.get_data()
-    grp = msg.text.strip() if msg.text.strip()!="-" else None
-    await db.add_subject(d["name"], grp); await state.clear()
-    await msg.answer(f"✅ *{d['name']}* добавлен!",
-        reply_markup=kb([btn("📚 Предметы","adm_subjects")]), parse_mode="Markdown")
+async def fsm_subj_group(msg: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    group = None if msg.text.strip() == "-" else msg.text.strip().upper()
+    await db.add_subject(data["name"], group)
+    await state.clear()
+    await msg.answer("✅ Предмет добавлен.", reply_markup=kb([btn("📚 Предметы", "adm_subjects")]))
 
 
 @dp.callback_query(F.data.startswith("adm_delsubj_"))
-async def cb_delsubj(cq: CallbackQuery):
-    """Удаляет предмет по его ID."""
-    if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
+async def cb_delsubj(cq: CallbackQuery) -> None:
+    if not is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
     await db.delete_subject(int(cq.data.split("_")[2]))
-    await cq.answer("Удалено!", show_alert=True)
-    cq.data="adm_subjects"; await cb_adm_subjects(cq)
+    await cq.answer("Удалено", show_alert=True)
+    await render_subjects(cq.message)
+
+
+async def render_subject_detail(message: Message, subject_id: int) -> None:
+    subject = await db.get_subject(subject_id)
+    if not subject:
+        await message.edit_text("Предмет не найден.", reply_markup=kb([btn("◀️ Назад", "adm_subjects")]))
+        return
+    classes = await db.classes_for_subject(subject_id)
+    rows = []
+    for cls in classes:
+        queue = await db.queue_for_class(cls["id"])
+        status = STAT_EMOJI.get(queue["status"] if queue else "pending", "⏳")
+        start, end = class_times(cls)
+        rows.append(
+            [
+                btn(f"{status} {fmt_dt(cls['dt'])} - {end} | {cls['room'] or '?'}", f"adm_clsd_{cls['id']}"),
+                btn("🗑", f"adm_delcls_{cls['id']}"),
+            ]
+        )
+    rows += [[btn("➕ Добавить пару", f"adm_addcls_{subject_id}")], [btn("◀️ Назад", "adm_subjects")]]
+    group = f"\nГруппа: `{subject['group_name']}`" if subject.get("group_name") else "\nПредмет общий"
+    await message.edit_text(
+        f"📖 *{subject['name']}*{group}",
+        reply_markup=kb(*rows),
+        parse_mode="Markdown",
+    )
 
 
 @dp.callback_query(F.data.startswith("adm_subj_"))
-async def cb_adm_subj(cq: CallbackQuery):
-    """Отображает список занятий для выбранного предмета."""
-    if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
+async def cb_adm_subj(cq: CallbackQuery) -> None:
+    if not is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
     await cq.answer()
-    sid = int(cq.data.split("_")[2])
-    subj = await db.get_subject(sid)
-    classes = await db.classes_for_subject(sid)
-    rows = []
-    for c in classes:
-        q = await db.queue_for_class(c["id"])
-        st = STAT_EMOJI.get(q["status"] if q else "pending","⏳")
-        rows.append([btn(f"{st} {fmt_dt(c['dt'])} | {c['room'] or '?'}",f"adm_clsd_{c['id']}"),
-                     btn("🗑",f"adm_delcls_{c['id']}")])
-    rows += [[btn("➕ Добавить пару",f"adm_addcls_{sid}")],[btn("◀️ Назад","adm_subjects")]]
-    await cq.message.edit_text(f"📖 *{subj['name']}*", reply_markup=kb(*rows), parse_mode="Markdown")
-
-
-@dp.callback_query(F.data.startswith("adm_clsd_"))
-async def cb_adm_clsd(cq: CallbackQuery):
-    """Отображает детали занятия, статус очереди и список заданий."""
-    if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
-    await cq.answer()
-    cid = int(cq.data.split("_")[2])
-    cls = await db.get_class(cid)
-    q   = await db.queue_for_class(cid)
-    entries = await db.queue_entries(q["id"]) if q else []
-    lines=[f"📅 *{cls['subject_name']}*",f"🕐 {fmt_dt(cls['dt'])}",
-           f"🚪 {cls['room'] or '—'}  👨‍🏫 {cls['teacher'] or '—'}"]
-    if q: lines.append(f"\n🎫 {STAT_EMOJI.get(q['status'],'')} {q['status']} · {len(entries)} чел.")
-    rows=[]
-    if q:
-        if q["status"]=="pending": rows.append([btn("🟢 Открыть запись",f"adm_openq_{q['id']}_{cid}")])
-        if q["status"]=="open":    rows.append([btn("🔀 Закрыть и рандомить",f"adm_closeq_{q['id']}_{cid}")])
-        if q["status"]=="closed":
-            rows.append([btn("📋 Отметить сдачи",f"adm_mark_{q['id']}_0")])
-            all_cls = await db.classes_for_subject(cls["subject_id"])
-            nxt=[c for c in all_cls if c["dt"]>cls["dt"]]
-            if nxt: rows.append([btn("⏩ Перенести",f"adm_carry_{q['id']}_{nxt[0]['id']}")])
-    rows+=[[btn("📝 Добавить задание",f"adm_addasgn_{cid}")],
-           [btn("◀️ Назад",f"adm_subj_{cls['subject_id']}")]]
-    await cq.message.edit_text("\n".join(lines),reply_markup=kb(*rows),parse_mode="Markdown")
+    await render_subject_detail(cq.message, int(cq.data.split("_")[2]))
 
 
 @dp.callback_query(F.data.startswith("adm_addcls_"))
-async def cb_addcls(cq: CallbackQuery, state: FSMContext):
-    """Начинает процесс добавления нового занятия."""
-    if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
-    await cq.answer(); sid=int(cq.data.split("_")[2])
-    await state.update_data(subject_id=sid); await state.set_state(Form.cls_dt)
-    await cq.message.edit_text("📅 Дата и время: `ДД.ММ.ГГГГ ЧЧ:ММ`",
-        reply_markup=kb([btn("❌ Отмена",f"adm_subj_{sid}")]),parse_mode="Markdown")
+async def cb_addcls(cq: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    subject_id = int(cq.data.split("_")[2])
+    await cq.answer()
+    await state.update_data(subject_id=subject_id)
+    await state.set_state(Form.cls_dt)
+    await cq.message.edit_text(
+        "Дата и время пары: `ДД.ММ.ГГГГ ЧЧ:ММ`",
+        reply_markup=kb([btn("❌ Отмена", f"adm_subj_{subject_id}")]),
+        parse_mode="Markdown",
+    )
 
 
 @dp.message(Form.cls_dt)
-async def fsm_cls_dt(msg: Message, state: FSMContext):
-    """Сохраняет время занятия и запрашивает аудиторию."""
-    dt=parse_dt(msg.text)
-    if not dt: await msg.answer("❌ Формат: `15.03.2025 10:00`",parse_mode="Markdown"); return
-    await state.update_data(dt=dt); await state.set_state(Form.cls_room)
-    await msg.answer("Аудитория (или `-`):")
+async def fsm_cls_dt(msg: Message, state: FSMContext) -> None:
+    dt = parse_dt(msg.text)
+    if not dt:
+        await msg.answer("Формат: `15.03.2026 10:40`", parse_mode="Markdown")
+        return
+    await state.update_data(dt=dt)
+    await state.set_state(Form.cls_duration)
+    await msg.answer("Длительность в минутах или `-` для стандартных 90:", parse_mode="Markdown")
+
+
+@dp.message(Form.cls_duration)
+async def fsm_cls_duration(msg: Message, state: FSMContext) -> None:
+    duration = parse_duration(msg.text)
+    if duration is None:
+        await msg.answer("Введите число от 15 до 360 или `-`.", parse_mode="Markdown")
+        return
+    await state.update_data(duration_minutes=duration)
+    await state.set_state(Form.cls_room)
+    await msg.answer("Аудитория или `-`:", parse_mode="Markdown")
 
 
 @dp.message(Form.cls_room)
-async def fsm_cls_room(msg: Message, state: FSMContext):
-    """Сохраняет аудиторию и запрашивает преподавателя."""
-    await state.update_data(room=msg.text.strip() if msg.text.strip()!="-" else "")
-    await state.set_state(Form.cls_teacher); await msg.answer("Преподаватель (или `-`):")
+async def fsm_cls_room(msg: Message, state: FSMContext) -> None:
+    room = None if msg.text.strip() == "-" else msg.text.strip()
+    await state.update_data(room=room)
+    await state.set_state(Form.cls_teacher)
+    await msg.answer("Преподаватель или `-`:", parse_mode="Markdown")
 
 
 @dp.message(Form.cls_teacher)
-async def fsm_cls_teacher(msg: Message, state: FSMContext):
-    """Сохраняет преподавателя и создает занятие в БД."""
-    d=await state.get_data()
-    teacher=msg.text.strip() if msg.text.strip()!="-" else ""
-    await db.add_class(d["subject_id"],d["dt"],d["room"],teacher); await state.clear()
-    await msg.answer("✅ Пара добавлена!",
-        reply_markup=kb([btn("📖 К предмету",f"adm_subj_{d['subject_id']}")]),parse_mode="Markdown")
+async def fsm_cls_teacher(msg: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    teacher = None if msg.text.strip() == "-" else msg.text.strip()
+    class_id = await db.add_class(
+        data["subject_id"],
+        data["dt"],
+        data.get("room"),
+        teacher,
+        data.get("duration_minutes", db.DEFAULT_DURATION_MINUTES),
+    )
+    await state.clear()
+    await msg.answer(
+        "✅ Пара добавлена.",
+        reply_markup=kb([btn("К паре", f"adm_clsd_{class_id}")]),
+    )
 
 
 @dp.callback_query(F.data.startswith("adm_delcls_"))
-async def cb_delcls(cq: CallbackQuery):
-    """Удаляет занятие."""
-    if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
-    cid=int(cq.data.split("_")[2]); cls=await db.get_class(cid); sid=cls["subject_id"] if cls else None
-    await db.delete_class(cid); await cq.answer("Удалено!",show_alert=True)
-    if sid: cq.data=f"adm_subj_{sid}"; await cb_adm_subj(cq)
+async def cb_delcls(cq: CallbackQuery) -> None:
+    if not is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    class_id = int(cq.data.split("_")[2])
+    cls = await db.get_class(class_id)
+    await db.delete_class(class_id)
+    await cq.answer("Пара удалена", show_alert=True)
+    await render_subject_detail(cq.message, cls["subject_id"])
+
+
+async def render_class_detail(message: Message, class_id: int) -> None:
+    cls = await db.get_class(class_id)
+    if not cls:
+        await message.edit_text("Пара не найдена.", reply_markup=kb([btn("◀️ Назад", "adm_subjects")]))
+        return
+    queue = await db.queue_for_class(class_id)
+    entries = await db.queue_entries(queue["id"]) if queue else []
+    start, end = class_times(cls)
+    lines = [
+        f"📅 *{cls['subject_name']}*",
+        f"🕘 {datetime.fromisoformat(cls['dt']).strftime('%d.%m.%Y')} {start} - {end}",
+        f"🚪 {cls['room'] or '—'}  👨‍🏫 {cls['teacher'] or '—'}",
+        f"👥 Группа: `{cls['group_name'] or 'общая'}`",
+    ]
+    if queue:
+        status = f"{STAT_EMOJI.get(queue['status'], '')} {STAT_LABEL.get(queue['status'], queue['status'])}"
+        lines.append(f"\n🎫 {status}; записано: {len(entries)}")
+    rows = []
+    if queue:
+        if queue["status"] == "pending":
+            rows.append([btn("🟢 Открыть запись", f"adm_openq_{queue['id']}_{class_id}")])
+        if queue["status"] == "open":
+            rows.append([btn("🔀 Закрыть и сформировать очередь", f"adm_closeq_{queue['id']}_{class_id}")])
+        if queue["status"] == "closed":
+            rows.append([btn("📋 Отметить сдачи", f"adm_mark_{queue['id']}_0")])
+            all_classes = await db.classes_for_subject(cls["subject_id"])
+            next_classes = [item for item in all_classes if item["dt"] > cls["dt"]]
+            if next_classes:
+                rows.append([btn("⏩ Перенести несдавших", f"adm_carry_{queue['id']}_{next_classes[0]['id']}")])
+    rows += [
+        [btn("📝 Добавить задание", f"adm_addasgn_{class_id}")],
+        [btn("◀️ Назад", f"adm_subj_{cls['subject_id']}")],
+    ]
+    await message.edit_text("\n".join(lines), reply_markup=kb(*rows), parse_mode="Markdown")
+
+
+@dp.callback_query(F.data.startswith("adm_clsd_"))
+async def cb_adm_clsd(cq: CallbackQuery) -> None:
+    if not is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    await cq.answer()
+    await render_class_detail(cq.message, int(cq.data.split("_")[2]))
 
 
 @dp.callback_query(F.data.startswith("adm_addasgn_"))
-async def cb_addasgn(cq: CallbackQuery, state: FSMContext):
-    """Начинает процесс добавления задания."""
-    if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
-    await cq.answer(); cid=int(cq.data.split("_")[2])
-    await state.update_data(class_id=cid); await state.set_state(Form.asgn_title)
-    await cq.message.edit_text("📝 Название задания:", reply_markup=kb([btn("❌ Отмена",f"adm_clsd_{cid}")]))
+async def cb_addasgn(cq: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    class_id = int(cq.data.split("_")[2])
+    await cq.answer()
+    await state.update_data(class_id=class_id)
+    await state.set_state(Form.asgn_title)
+    await cq.message.edit_text(
+        "Название задания:",
+        reply_markup=kb([btn("❌ Отмена", f"adm_clsd_{class_id}")]),
+    )
 
 
 @dp.message(Form.asgn_title)
-async def fsm_asgn_title(msg, state):
-    """Начинает процесс добавления задания."""
-    await state.update_data(title=msg.text.strip()); await state.set_state(Form.asgn_desc)
-    await msg.answer("Описание (или `-`):")
+async def fsm_asgn_title(msg: Message, state: FSMContext) -> None:
+    await state.update_data(title=msg.text.strip())
+    await state.set_state(Form.asgn_desc)
+    await msg.answer("Описание или `-`:", parse_mode="Markdown")
 
 
 @dp.message(Form.asgn_desc)
-async def fsm_asgn_desc(msg, state):
-    """Сохраняет описание и запрашивает дедлайн."""
-    desc=msg.text.strip() if msg.text.strip()!="-" else None
-    await state.update_data(description=desc); await state.set_state(Form.asgn_dl)
-    await msg.answer("Дедлайн `ДД.ММ.ГГГГ ЧЧ:ММ` (или `-`):",parse_mode="Markdown")
+async def fsm_asgn_desc(msg: Message, state: FSMContext) -> None:
+    desc = None if msg.text.strip() == "-" else msg.text.strip()
+    await state.update_data(description=desc)
+    await state.set_state(Form.asgn_dl)
+    await msg.answer("Дедлайн `ДД.ММ.ГГГГ ЧЧ:ММ` или `-`:", parse_mode="Markdown")
 
 
 @dp.message(Form.asgn_dl)
-async def fsm_asgn_dl(msg, state):
-    """Сохраняет дедлайн и запрашивает ссылку."""
-    t=msg.text.strip()
-    await state.update_data(deadline=parse_dt(t) if t!="-" else None)
-    await state.set_state(Form.asgn_url); await msg.answer("Ссылка на задание (или `-`):")
+async def fsm_asgn_dl(msg: Message, state: FSMContext) -> None:
+    text = msg.text.strip()
+    if text == "-":
+        deadline = None
+    else:
+        deadline = parse_dt(text)
+        if deadline is None:
+            await msg.answer("Формат дедлайна: `15.03.2026 23:59` или `-`.", parse_mode="Markdown")
+            return
+    await state.update_data(deadline=deadline)
+    await state.set_state(Form.asgn_url)
+    await msg.answer("Ссылка на материал или `-`:", parse_mode="Markdown")
 
 
 @dp.message(Form.asgn_url)
-async def fsm_asgn_url(msg, state):
-    """Сохраняет ссылку и создает задание в БД."""
-    d=await state.get_data(); url=msg.text.strip() if msg.text.strip()!="-" else None
-    cls=await db.get_class(d["class_id"])
-    await db.add_assignment(d["class_id"],cls["subject_id"],d["title"],
-                             d.get("description"),d.get("deadline"),url)
+async def fsm_asgn_url(msg: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    cls = await db.get_class(data["class_id"])
+    url = None if msg.text.strip() == "-" else msg.text.strip()
+    await db.add_assignment(
+        data["class_id"],
+        cls["subject_id"],
+        data["title"],
+        data.get("description"),
+        data.get("deadline"),
+        url,
+    )
     await state.clear()
-    await msg.answer(f"✅ *{d['title']}* добавлено!",
-        reply_markup=kb([btn("К паре",f"adm_clsd_{d['class_id']}")]),parse_mode="Markdown")
+    await msg.answer(
+        "✅ Задание добавлено.",
+        reply_markup=kb([btn("К паре", f"adm_clsd_{data['class_id']}")]),
+    )
 
 
 @dp.callback_query(F.data.startswith("adm_openq_"))
-async def cb_openq(cq: CallbackQuery):
-    """Открывает запись в очередь для студентов."""
-    if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
-    p=cq.data.split("_"); qid,cid=int(p[2]),int(p[3])
-    await db.set_queue_status(qid,"open"); await cq.answer("✅ Открыта!",show_alert=True)
-    cq.data=f"adm_clsd_{cid}"; await cb_adm_clsd(cq)
+async def cb_openq(cq: CallbackQuery) -> None:
+    if not is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    _, _, queue_id, class_id = cq.data.split("_")
+    class_id_int = int(class_id)
+    await db.set_queue_status(int(queue_id), "open")
+    await notify_queue_open(cq.bot, class_id_int)
+    await cq.answer("Запись открыта, студенты уведомлены", show_alert=True)
+    await render_class_detail(cq.message, class_id_int)
 
 
 @dp.callback_query(F.data.startswith("adm_closeq_"))
-async def cb_closeq(cq: CallbackQuery):
-    """Закрывает запись, рандомизирует очередь и уведомляет студентов."""
-    if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
-    p=cq.data.split("_"); qid,cid=int(p[2]),int(p[3])
-    await db.randomize_queue(qid)
-    for e in await db.queue_entries(qid):
+async def cb_closeq(cq: CallbackQuery) -> None:
+    if not is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    _, _, queue_id, class_id = cq.data.split("_")
+    queue_id_int = int(queue_id)
+    await db.randomize_queue(queue_id_int)
+    for entry in await db.queue_entries(queue_id_int):
         try:
-            pos=e["position"] or "—"; qcat=e.get("q_category") or "middle"
-            await cq.bot.send_message(e["telegram_id"],
-                f"🎲 *Очередь сформирована!*\n\nПозиция: *{pos}*\nКатегория: {CAT_EMOJI[qcat]} {CAT_LABEL[qcat]}\n\nУдачи! 💪",
-                parse_mode="Markdown")
-        except: pass
-    await cq.answer("🔀 Готово!",show_alert=True)
-    cq.data=f"adm_clsd_{cid}"; await cb_adm_clsd(cq)
+            pos = entry["position"] or "—"
+            qcat = entry.get("q_category") or "middle"
+            await cq.bot.send_message(
+                entry["telegram_id"],
+                "🎲 *Очередь сформирована!*\n\n"
+                f"Позиция: *{pos}*\n"
+                f"Категория очереди: {CAT_EMOJI[qcat]} {CAT_LABEL[qcat]}",
+                parse_mode="Markdown",
+            )
+        except Exception:
+            log.exception("Cannot notify queue participant")
+    await cq.answer("Очередь сформирована", show_alert=True)
+    await render_class_detail(cq.message, int(class_id))
 
 
 @dp.callback_query(F.data.startswith("adm_carry_"))
-async def cb_carry(cq: CallbackQuery):
-    """Переносит несдавших студентов в следующую очередь."""
-    if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
-    p=cq.data.split("_"); qid,ncid=int(p[2]),int(p[3])
-    await db.carry_queue(qid,ncid); await cq.answer("⏩ Перенесено!",show_alert=True)
-    cq.data=f"adm_clsd_{ncid}"; await cb_adm_clsd(cq)
+async def cb_carry(cq: CallbackQuery) -> None:
+    if not is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    _, _, queue_id, next_class_id = cq.data.split("_")
+    await db.carry_queue(int(queue_id), int(next_class_id))
+    await cq.answer("Несдавшие перенесены", show_alert=True)
+    await render_class_detail(cq.message, int(next_class_id))
+
+
+async def render_mark_page(message: Message, queue_id: int, page: int = 0) -> None:
+    per_page = 4
+    queue = await db.get_queue(queue_id)
+    entries = await db.queue_entries(queue_id)
+    chunk = entries[page * per_page : (page + 1) * per_page]
+    rows = []
+    for entry in chunk:
+        pos = entry["position"] or "—"
+        name = entry["full_name"][:24]
+        current = "✅" if entry["submitted"] and entry["on_time"] else ("⏰" if entry["submitted"] else "❌")
+        rows.append([btn(f"{pos}. {name} {current}", "noop")])
+        rows.append(
+            [
+                btn("✅", f"adm_sub_{queue_id}_{entry['user_id']}_on_time_{page}"),
+                btn("⏰", f"adm_sub_{queue_id}_{entry['user_id']}_late_{page}"),
+                btn("❌", f"adm_sub_{queue_id}_{entry['user_id']}_no_show_{page}"),
+            ]
+        )
+    nav = []
+    if page > 0:
+        nav.append(btn("◀", f"adm_mark_{queue_id}_{page - 1}"))
+    if (page + 1) * per_page < len(entries):
+        nav.append(btn("▶", f"adm_mark_{queue_id}_{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([btn("◀️ Назад", f"adm_clsd_{queue['class_id']}")])
+    pages = max(1, (len(entries) - 1) // per_page + 1)
+    await message.edit_text(
+        f"📋 *Сдачи* - стр. {page + 1}/{pages}",
+        reply_markup=kb(*rows),
+        parse_mode="Markdown",
+    )
 
 
 @dp.callback_query(F.data.startswith("adm_mark_"))
-async def cb_mark(cq: CallbackQuery):
-    """Отображает пагинированный список студентов для выставления оценок."""
-    if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
+async def cb_mark(cq: CallbackQuery) -> None:
+    if not is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
     await cq.answer()
-    p=cq.data.split("_"); qid=int(p[2]); page=int(p[3]) if len(p)>3 else 0
-    PAGE=4; q=await db.get_queue(qid); entries=await db.queue_entries(qid)
-    chunk=entries[page*PAGE:(page+1)*PAGE]; rows=[]
-    for e in chunk:
-        pos=e["position"] or "—"; name=e["full_name"][:18]
-        cur="✅" if e["submitted"] and e["on_time"] else ("⏰" if e["submitted"] else "❌")
-        rows.append([btn(f"{pos}. {name} {cur}","noop")])
-        rows.append([btn("✅",f"adm_sub_{qid}_{e['user_id']}_on_time_{page}"),
-                     btn("⏰",f"adm_sub_{qid}_{e['user_id']}_late_{page}"),
-                     btn("❌",f"adm_sub_{qid}_{e['user_id']}_no_show_{page}")])
-    nav=[]
-    if page>0: nav.append(btn("◀",f"adm_mark_{qid}_{page-1}"))
-    if (page+1)*PAGE<len(entries): nav.append(btn("▶",f"adm_mark_{qid}_{page+1}"))
-    if nav: rows.append(nav)
-    rows.append([btn("◀️ Назад",f"adm_clsd_{q['class_id']}")])
-    await cq.message.edit_text(
-        f"📋 *Сдачи* — стр. {page+1}/{max(1,(len(entries)-1)//PAGE+1)}",
-        reply_markup=kb(*rows),parse_mode="Markdown")
+    parts = cq.data.split("_")
+    queue_id = int(parts[2])
+    page = int(parts[3]) if len(parts) > 3 else 0
+    await render_mark_page(cq.message, queue_id, page)
 
 
 @dp.callback_query(F.data.startswith("adm_sub_"))
-async def cb_sub(cq: CallbackQuery):
-    """Фиксирует результат сдачи (вовремя, поздно, не сдал) для студента."""
-    if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
-    p=cq.data.split("_"); qid,uid,kind,page=int(p[2]),int(p[3]),p[4],int(p[5])
-    await db.mark_submission(qid,uid,kind)
-    u=await db.get_user(uid)
-    label={"on_time":"✅ Вовремя","late":"⏰ Поздно","no_show":"❌ Не сдал"}.get(kind,"")
-    await cq.answer(f"{label}. Рейтинг: {u['rating']}/100",show_alert=True)
-    cq.data=f"adm_mark_{qid}_{page}"; await cb_mark(cq)
+async def cb_sub(cq: CallbackQuery) -> None:
+    if not is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    parts = cq.data.split("_")
+    queue_id = int(parts[2])
+    user_id = int(parts[3])
+    if parts[4] == "on":
+        kind, page = "on_time", int(parts[6])
+    elif parts[4] == "no":
+        kind, page = "no_show", int(parts[6])
+    else:
+        kind, page = parts[4], int(parts[5])
+    await db.mark_submission(queue_id, user_id, kind)
+    user = await db.get_user(user_id)
+    await cq.answer(f"Готово. Рейтинг: {user['rating']}/100", show_alert=True)
+    await render_mark_page(cq.message, queue_id, page)
 
 
 @dp.callback_query(F.data == "adm_users")
-async def cb_adm_users(cq: CallbackQuery):
-    """Отображает список всех студентов для админа."""
-    if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
+async def cb_adm_users(cq: CallbackQuery) -> None:
+    if not is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
     await cq.answer()
-    users=await db.all_users()
-    rows=[[btn(f"{CAT_EMOJI[u['category']]} {u['full_name'][:22]} ({u['rating']})",f"adm_user_{u['id']}")] for u in users]
-    rows.append([btn("◀️ Назад","admin")])
-    await cq.message.edit_text("👥 *Студенты*",reply_markup=kb(*rows),parse_mode="Markdown")
+    users = await db.all_users()
+    rows = [
+        [btn(f"{CAT_EMOJI[user['category']]} {user['full_name'][:22]} ({user['rating']})", f"adm_user_{user['id']}")]
+        for user in users
+    ]
+    rows.append([btn("◀️ Назад", "admin")])
+    await cq.message.edit_text("👥 *Студенты*", reply_markup=kb(*rows), parse_mode="Markdown")
 
 
 @dp.callback_query(F.data.startswith("adm_user_"))
-async def cb_adm_user(cq: CallbackQuery):
-    """Отображает детали студента с опциями редактирования."""
-    if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
-    await cq.answer(); uid=int(cq.data.split("_")[2]); u=await db.get_user(uid)
-    await cq.message.edit_text(fmt_user(u) if u else "?",
+async def cb_adm_user(cq: CallbackQuery) -> None:
+    if not is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    await cq.answer()
+    user_id = int(cq.data.split("_")[2])
+    user = await db.get_user(user_id)
+    await cq.message.edit_text(
+        fmt_user(user) if user else "Не найден",
         reply_markup=kb(
-            [btn("✏️ Изменить ФИО", f"adm_editname_{uid}")],
-            [btn("✏️ Изменить рейтинг", f"adm_editr_{uid}")],
-            [btn("◀️ Назад","adm_users")]
+            [btn("✏️ Изменить ФИО", f"adm_editname_{user_id}")],
+            [btn("🎓 Изменить группу", f"adm_editgroup_{user_id}")],
+            [btn("⭐ Изменить рейтинг", f"adm_editr_{user_id}")],
+            [btn("◀️ Назад", "adm_users")],
         ),
-        parse_mode="Markdown")
+        parse_mode="Markdown",
+    )
 
 
 @dp.callback_query(F.data.startswith("adm_editname_"))
-async def cb_editname(cq: CallbackQuery, state: FSMContext):
-    """Начинает процесс изменения ФИО студента."""
-    if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
-    await cq.answer(); uid=int(cq.data.split("_")[2]); u=await db.get_user(uid)
-    await state.update_data(edit_uid=uid); await state.set_state(Form.edit_name)
-    await cq.message.edit_text(
-        f"✏️ Текущее ФИО: *{u['full_name']}*\n\nВведите новое ФИО:",
-        reply_markup=kb([btn("❌ Отмена",f"adm_user_{uid}")]),parse_mode="Markdown")
+async def cb_editname(cq: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    user_id = int(cq.data.split("_")[2])
+    await cq.answer()
+    await state.update_data(edit_uid=user_id)
+    await state.set_state(Form.edit_name)
+    await cq.message.edit_text("Введите новое ФИО:", reply_markup=kb([btn("❌ Отмена", f"adm_user_{user_id}")]))
 
 
 @dp.message(Form.edit_name)
-async def fsm_edit_name(msg, state):
-    """Сохраняет новое ФИО студента."""
+async def fsm_edit_name(msg: Message, state: FSMContext) -> None:
     name = msg.text.strip()
     if len(name.split()) < 2:
-        await msg.answer("❌ Минимум 2 слова (Фамилия Имя):"); return
-    d=await state.get_data(); uid=d["edit_uid"]
-    await db.set_full_name(uid, name); await state.clear(); u=await db.get_user(uid)
-    await msg.answer(f"✅ ФИО изменено!\n\n{fmt_user(u)}",
-        reply_markup=kb([btn("◀️",f"adm_user_{uid}")]),parse_mode="Markdown")
+        await msg.answer("Минимум два слова.")
+        return
+    data = await state.get_data()
+    await db.set_full_name(data["edit_uid"], name)
+    await state.clear()
+    user = await db.get_user(data["edit_uid"])
+    await msg.answer(fmt_user(user), reply_markup=kb([btn("◀️", f"adm_user_{data['edit_uid']}")]), parse_mode="Markdown")
+
+
+@dp.callback_query(F.data.startswith("adm_editgroup_"))
+async def cb_editgroup(cq: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    user_id = int(cq.data.split("_")[2])
+    await cq.answer()
+    await state.update_data(edit_uid=user_id)
+    await state.set_state(Form.edit_group)
+    await cq.message.edit_text(
+        "Введите новую группу или `-`, чтобы очистить:",
+        reply_markup=kb([btn("❌ Отмена", f"adm_user_{user_id}")]),
+        parse_mode="Markdown",
+    )
+
+
+@dp.message(Form.edit_group)
+async def fsm_edit_group(msg: Message, state: FSMContext) -> None:
+    group = None if msg.text.strip() == "-" else msg.text.strip().upper()
+    data = await state.get_data()
+    await db.set_group(data["edit_uid"], group)
+    await state.clear()
+    user = await db.get_user(data["edit_uid"])
+    await msg.answer(fmt_user(user), reply_markup=kb([btn("◀️", f"adm_user_{data['edit_uid']}")]), parse_mode="Markdown")
 
 
 @dp.callback_query(F.data.startswith("adm_editr_"))
-async def cb_editr(cq: CallbackQuery, state: FSMContext):
-    """Начинает процесс изменения рейтинга студента."""
-    if not is_admin(cq): await cq.answer("⛔", show_alert=True); return
-    await cq.answer(); uid=int(cq.data.split("_")[2]); u=await db.get_user(uid)
-    await state.update_data(edit_uid=uid); await state.set_state(Form.edit_rating)
-    await cq.message.edit_text(f"Рейтинг *{u['full_name']}*: `{u['rating']}/100`\n\nНовый (0–100):",
-        reply_markup=kb([btn("❌ Отмена",f"adm_user_{uid}")]),parse_mode="Markdown")
+async def cb_editr(cq: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    user_id = int(cq.data.split("_")[2])
+    await cq.answer()
+    await state.update_data(edit_uid=user_id)
+    await state.set_state(Form.edit_rating)
+    await cq.message.edit_text(
+        "Новый рейтинг от 0 до 100:",
+        reply_markup=kb([btn("❌ Отмена", f"adm_user_{user_id}")]),
+    )
 
 
 @dp.message(Form.edit_rating)
-async def fsm_edit_rating(msg, state):
-    """Сохраняет новый рейтинг студента."""
+async def fsm_edit_rating(msg: Message, state: FSMContext) -> None:
     try:
-        r=int(msg.text.strip()); d=await state.get_data(); uid=d["edit_uid"]
-        await db.set_rating(uid,r); await state.clear(); u=await db.get_user(uid)
-        await msg.answer(f"✅ Готово!\n\n{fmt_user(u)}",
-            reply_markup=kb([btn("◀️",f"adm_user_{uid}")]),parse_mode="Markdown")
+        rating = int(msg.text.strip())
     except ValueError:
-        await msg.answer("❌ Число от 0 до 100.")
+        await msg.answer("Введите число от 0 до 100.")
+        return
+    data = await state.get_data()
+    await db.set_rating(data["edit_uid"], rating)
+    await state.clear()
+    user = await db.get_user(data["edit_uid"])
+    await msg.answer(fmt_user(user), reply_markup=kb([btn("◀️", f"adm_user_{data['edit_uid']}")]), parse_mode="Markdown")
 
 
 @dp.callback_query(F.data == "noop")
-async def cb_noop(cq):
-    """Acknowledge a callback query without changing the current message."""
+async def cb_noop(cq: CallbackQuery) -> None:
     await cq.answer()
 
 
-# ── Web API ───────────────────────────────────────────────────────────────────
-def add_cors(resp):
-    """Добавляет CORS заголовки к HTTP ответу."""
-    resp.headers["Access-Control-Allow-Origin"]  = "*"
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+def add_cors(resp: web.StreamResponse) -> web.StreamResponse:
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Telegram-Init-Data"
+    resp.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
     return resp
 
 
-async def serve_index(request):
-    """Возвращает статический файл index.html для WebApp."""
+def json_response(data: dict, status: int = 200) -> web.Response:
+    return add_cors(web.json_response(data, status=status))
+
+
+async def serve_index(request: web.Request) -> web.Response:
     try:
         return web.Response(text=INDEX_HTML.read_text(encoding="utf-8"), content_type="text/html")
     except FileNotFoundError:
-        return web.Response(text="index.html not found",status=404)
+        return web.Response(text="index.html not found", status=404)
 
 
-async def api_schedule(request):
-    """API-эндпоинт для получения расписания на конкретную дату."""
-    date_str=request.rel_url.query.get("date","")
-    if not date_str: return web.json_response({"classes":[]})
-    try: date_obj=datetime.strptime(date_str,"%Y-%m-%d").date()
-    except ValueError: return web.json_response({"classes":[]})
-    subjects=await db.all_subjects(); result=[]
-    for subj in subjects:
-        for cls in await db.classes_for_subject(subj["id"]):
-            try: cls_dt=datetime.fromisoformat(cls["dt"])
-            except: continue
-            if cls_dt.date()!=date_obj: continue
-            queue=await db.queue_for_class(cls["id"])
-            entries=await db.queue_entries(queue["id"]) if queue else []
-            end_h=min(cls_dt.hour+1,23); end_m=30
-            result.append({
-                "id":cls["id"],"subject_name":subj["name"],
-                "teacher":cls["teacher"] or "","room":cls["room"] or "","type":"ПР",
-                "time_start":cls_dt.strftime("%H:%M"),
-                "time_end":f"{end_h:02d}:{end_m:02d}",
-                "queue_status":queue["status"] if queue else "pending",
-                "queue_count":len(entries),
-            })
-    result.sort(key=lambda x:x["time_start"])
-    return add_cors(web.json_response({"classes":result}))
-
-
-async def api_queue_detail(request):
-    """API-эндпоинт для получения деталей очереди конкретного занятия."""
-    cid=int(request.match_info["class_id"])
-    cls=await db.get_class(cid)
-    if not cls: return web.json_response({"error":"not found"},status=404)
-    queue=await db.queue_for_class(cid)
-    entries=await db.queue_entries(queue["id"]) if queue else []
-    asgns=await db.assignments_for_class(cid)
+async def request_json(request: web.Request) -> dict:
     try:
-        cls_dt=datetime.fromisoformat(cls["dt"])
-        t_start=cls_dt.strftime("%H:%M")
-        t_end=f"{min(cls_dt.hour+1,23):02d}:30"
-    except: t_start=t_end=""
-    return add_cors(web.json_response({
-        "class_id":cid,"subject_name":cls["subject_name"],
-        "teacher":cls["teacher"] or "","room":cls["room"] or "",
-        "time_start":t_start,"time_end":t_end,
-        "queue":{
-            "id":queue["id"] if queue else None,
-            "status":queue["status"] if queue else "pending",
-            "entries":[{
-                "telegram_id":e["telegram_id"],"full_name":e["full_name"],
-                "position":e["position"],"q_category":e["q_category"],
-                "user_cat":e["user_cat"],"submitted":bool(e["submitted"]),"on_time":bool(e["on_time"]),
-            } for e in entries],
-        },
-        "assignments":[{"title":a["title"],"description":a.get("description"),
-                        "deadline":a.get("deadline"),"url":a.get("url")} for a in asgns],
-    }))
+        return await request.json()
+    except json.JSONDecodeError:
+        return {}
 
 
-async def api_join(request):
-    """API-эндпоинт для записи пользователя в очередь."""
-    cid=int(request.match_info["class_id"]); data=await request.json()
-    user=await db.get_user_by_tg(data.get("user_id",0))
-    if not user: return web.json_response({"error":"Сначала напишите /start боту"},status=400)
-    queue=await db.queue_for_class(cid)
-    if not queue or queue["status"]!="open":
-        return web.json_response({"error":"Запись закрыта"},status=400)
-    if await db.is_in_queue(queue["id"],user["id"]):
-        return add_cors(web.json_response({"status":"already_in"}))
-    await db.join_queue(queue["id"],user["id"])
-    return add_cors(web.json_response({"status":"ok"}))
+def init_data_from_request(request: web.Request, data: Optional[dict] = None) -> str:
+    if request.headers.get("X-Telegram-Init-Data"):
+        return request.headers["X-Telegram-Init-Data"]
+    if data and data.get("init_data"):
+        return data["init_data"]
+    return request.rel_url.query.get("init_data", "")
 
 
-async def api_leave(request):
-    """API-эндпоинт для выхода пользователя из очереди."""
-    cid=int(request.match_info["class_id"]); data=await request.json()
-    user=await db.get_user_by_tg(data.get("user_id",0))
-    if not user: return web.json_response({"error":"not found"},status=400)
-    queue=await db.queue_for_class(cid)
-    if queue: await db.leave_queue(queue["id"],user["id"])
-    return add_cors(web.json_response({"status":"ok"}))
+async def telegram_profile_from_request(
+    request: web.Request,
+    data: Optional[dict] = None,
+    required: bool = False,
+) -> Optional[dict]:
+    init_data = init_data_from_request(request, data)
+    if init_data:
+        try:
+            return validate_init_data(init_data, TOKEN)
+        except WebAppAuthError as exc:
+            if required:
+                raise web.HTTPUnauthorized(
+                    text=json.dumps({"error": str(exc)}, ensure_ascii=False),
+                    content_type="application/json",
+                )
+            return None
+    if ALLOW_UNVERIFIED_WEBAPP and data and data.get("user_id"):
+        return {"id": int(data["user_id"]), "first_name": data.get("name", "Dev")}
+    if required:
+        raise web.HTTPUnauthorized(
+            text=json.dumps({"error": "Требуется запуск из Telegram WebApp"}, ensure_ascii=False),
+            content_type="application/json",
+        )
+    return None
 
 
-async def options_handler(request):
-    """Обработчик OPTIONS запросов для CORS."""
-    resp=web.Response()
-    resp.headers.update({"Access-Control-Allow-Origin":"*",
-                          "Access-Control-Allow-Methods":"GET,POST,OPTIONS",
-                          "Access-Control-Allow-Headers":"Content-Type"})
-    return resp
+async def db_user_from_request(
+    request: web.Request,
+    data: Optional[dict] = None,
+    required: bool = False,
+) -> Optional[dict]:
+    profile = await telegram_profile_from_request(request, data, required=required)
+    if not profile:
+        return None
+    return await db.get_user_by_tg(int(profile["id"]))
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+async def require_admin_user(request: web.Request, data: Optional[dict] = None) -> dict:
+    profile = await telegram_profile_from_request(request, data, required=True)
+    if not is_admin_id(int(profile["id"])):
+        raise web.HTTPForbidden(
+            text=json.dumps({"error": "Нет доступа"}, ensure_ascii=False),
+            content_type="application/json",
+        )
+    return profile
+
+
+def can_access_class(user: Optional[dict], cls: dict) -> bool:
+    class_group = cls.get("group_name")
+    if not class_group:
+        return True
+    if not user or not user.get("group_name"):
+        return False
+    return user["group_name"].strip().upper() == class_group.strip().upper()
+
+
+def class_payload(
+    cls: dict,
+    queue: Optional[dict],
+    entries: list[dict],
+    user_entry: Optional[dict] = None,
+) -> dict:
+    start, end = class_times(cls)
+    return {
+        "id": cls["id"],
+        "subject_id": cls["subject_id"],
+        "subject_name": cls["subject_name"],
+        "group_name": cls.get("group_name") or "",
+        "teacher": cls.get("teacher") or "",
+        "room": cls.get("room") or "",
+        "type": "ПР",
+        "date": datetime.fromisoformat(cls["dt"]).strftime("%Y-%m-%d"),
+        "time_start": start,
+        "time_end": end,
+        "duration_minutes": cls.get("duration_minutes") or db.DEFAULT_DURATION_MINUTES,
+        "queue_id": queue["id"] if queue else None,
+        "queue_status": queue["status"] if queue else "pending",
+        "queue_count": len(entries),
+        "user_in_queue": user_entry is not None,
+        "user_position": user_entry["position"] if user_entry and user_entry.get("position") else None,
+        "user_q_category": user_entry.get("q_category") if user_entry else None,
+    }
+
+
+async def api_me(request: web.Request) -> web.Response:
+    profile = await telegram_profile_from_request(request)
+    if not profile:
+        return json_response({"authenticated": False, "registered": False, "is_admin": False})
+    user = await db.get_user_by_tg(int(profile["id"]))
+    return json_response(
+        {
+            "authenticated": True,
+            "registered": bool(user),
+            "is_admin": is_admin_id(int(profile["id"])),
+            "telegram_user": profile,
+            "user": user,
+        }
+    )
+
+
+async def api_schedule(request: web.Request) -> web.Response:
+    date_str = request.rel_url.query.get("date", "")
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        return json_response({"classes": []})
+    user = await db_user_from_request(request)
+    group_name = user.get("group_name") if user else None
+    classes = await db.classes_for_date(date_str, group_name)
+
+    queues: dict[int, Optional[dict]] = {}
+    entries_map: dict[int, list[dict]] = {}
+    for cls in classes:
+        queue = await db.queue_for_class(cls["id"])
+        queues[cls["id"]] = queue
+        if queue:
+            entries_map[queue["id"]] = await db.queue_entries(queue["id"])
+
+    queue_ids = [q["id"] for q in queues.values() if q]
+    user_entries = await db.user_entries_for_queues(user["id"], queue_ids) if user and queue_ids else {}
+
+    result = []
+    for cls in classes:
+        queue = queues.get(cls["id"])
+        entries = entries_map.get(queue["id"], []) if queue else []
+        user_entry = user_entries.get(queue["id"]) if queue else None
+        result.append(class_payload(cls, queue, entries, user_entry))
+    return json_response({"classes": result})
+
+
+async def api_queue_detail(request: web.Request) -> web.Response:
+    class_id = int(request.match_info["class_id"])
+    user = await db_user_from_request(request)
+    cls = await db.get_class(class_id)
+    if not cls:
+        return json_response({"error": "not found"}, status=404)
+    if user and not can_access_class(user, cls):
+        return json_response({"error": "Эта пара относится к другой группе"}, status=403)
+    queue = await db.queue_for_class(class_id)
+    entries = await db.queue_entries(queue["id"]) if queue else []
+    assignments = await db.assignments_for_class(class_id)
+    payload = class_payload(cls, queue, entries)
+    payload.update(
+        {
+            "class_id": class_id,
+            "queue": {
+                "id": queue["id"] if queue else None,
+                "status": queue["status"] if queue else "pending",
+                "entries": [
+                    {
+                        "user_id": entry["user_id"],
+                        "telegram_id": entry["telegram_id"],
+                        "full_name": entry["full_name"],
+                        "group_name": entry.get("group_name") or "",
+                        "position": entry["position"],
+                        "q_category": entry["q_category"],
+                        "user_cat": entry["user_cat"],
+                        "submitted": bool(entry["submitted"]),
+                        "on_time": bool(entry["on_time"]),
+                    }
+                    for entry in entries
+                ],
+            },
+            "assignments": [
+                {
+                    "title": item["title"],
+                    "description": item.get("description"),
+                    "deadline": item.get("deadline"),
+                    "url": item.get("url"),
+                }
+                for item in assignments
+            ],
+        }
+    )
+    return json_response(payload)
+
+
+async def api_join(request: web.Request) -> web.Response:
+    class_id = int(request.match_info["class_id"])
+    data = await request_json(request)
+    user = await db_user_from_request(request, data, required=True)
+    if not user:
+        return json_response({"error": "Сначала напишите /start боту"}, status=400)
+    cls = await db.get_class(class_id)
+    if not cls or not can_access_class(user, cls):
+        return json_response({"error": "Пара недоступна вашей группе"}, status=403)
+    queue = await db.queue_for_class(class_id)
+    if not queue or queue["status"] != "open":
+        return json_response({"error": "Запись закрыта"}, status=400)
+    if await db.is_in_queue(queue["id"], user["id"]):
+        return json_response({"status": "already_in"})
+    await db.join_queue(queue["id"], user["id"])
+    return json_response({"status": "ok"})
+
+
+async def api_leave(request: web.Request) -> web.Response:
+    class_id = int(request.match_info["class_id"])
+    data = await request_json(request)
+    user = await db_user_from_request(request, data, required=True)
+    if not user:
+        return json_response({"error": "not found"}, status=400)
+    queue = await db.queue_for_class(class_id)
+    if queue:
+        await db.leave_queue(queue["id"], user["id"])
+    return json_response({"status": "ok"})
+
+
+async def api_admin_subjects(request: web.Request) -> web.Response:
+    data = await request_json(request) if request.method == "POST" else None
+    await require_admin_user(request, data)
+    if request.method == "POST":
+        subject_id = await db.add_subject(data.get("name", "").strip(), data.get("group_name"))
+        return json_response({"status": "ok", "id": subject_id})
+    return json_response({"subjects": await db.all_subjects()})
+
+
+async def api_admin_classes(request: web.Request) -> web.Response:
+    data = await request_json(request)
+    await require_admin_user(request, data)
+    dt = data.get("dt") or parse_dt(f"{data.get('date', '')} {data.get('time', '')}")
+    if not dt:
+        return json_response({"error": "Некорректная дата"}, status=400)
+    class_id = await db.add_class(
+        int(data["subject_id"]),
+        dt,
+        data.get("room"),
+        data.get("teacher"),
+        int(data.get("duration_minutes") or db.DEFAULT_DURATION_MINUTES),
+    )
+    return json_response({"status": "ok", "id": class_id})
+
+
+async def api_admin_queue_action(request: web.Request) -> web.Response:
+    data = await request_json(request)
+    await require_admin_user(request, data)
+    queue_id = int(request.match_info["queue_id"])
+    action = request.match_info["action"]
+    if action == "open":
+        await db.set_queue_status(queue_id, "open")
+        bot = request.app.get("bot")
+        if bot:
+            queue = await db.get_queue(queue_id)
+            if queue:
+                await notify_queue_open(bot, queue["class_id"])
+    elif action == "close":
+        await db.randomize_queue(queue_id)
+        bot = request.app.get("bot")
+        if bot:
+            for entry in await db.queue_entries(queue_id):
+                try:
+                    pos = entry["position"] or "—"
+                    qcat = entry.get("q_category") or "middle"
+                    await bot.send_message(
+                        entry["telegram_id"],
+                        "🎲 *Очередь сформирована!*\n\n"
+                        f"Позиция: *{pos}*\n"
+                        f"Категория очереди: {CAT_EMOJI[qcat]} {CAT_LABEL[qcat]}",
+                        parse_mode="Markdown",
+                    )
+                except Exception:
+                    log.exception("Cannot notify queue participant")
+    elif action in {"pending", "completed"}:
+        await db.set_queue_status(queue_id, action)
+    else:
+        return json_response({"error": "unknown action"}, status=400)
+    return json_response({"status": "ok"})
+
+
+async def api_admin_mark(request: web.Request) -> web.Response:
+    data = await request_json(request)
+    await require_admin_user(request, data)
+    await db.mark_submission(int(data["queue_id"]), int(data["user_id"]), data["kind"])
+    return json_response({"status": "ok"})
+
+
+async def options_handler(request: web.Request) -> web.Response:
+    return add_cors(web.Response())
+
+
 def create_bot() -> Bot:
-    """Create and validate the Telegram bot instance from environment settings."""
     if not TOKEN:
         raise RuntimeError("BOT_TOKEN is not set. Configure the environment before starting the app.")
+    proxy = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")
+    if proxy:
+        log.info("Using proxy: %s", proxy)
+        return Bot(token=TOKEN, session=AiohttpSession(proxy=proxy))
     return Bot(token=TOKEN)
 
 
-async def main():
-    """Точка входа: инициализация БД, запуск Web-сервера и бота."""
+async def main() -> None:
     bot = create_bot()
     await db.init()
-    app=web.Application()
-    app.router.add_get("/",serve_index)
-    app.router.add_get("/api/schedule",api_schedule)
-    app.router.add_get("/api/queue/{class_id}",api_queue_detail)
-    app.router.add_post("/api/queue/{class_id}/join",api_join)
-    app.router.add_post("/api/queue/{class_id}/leave",api_leave)
-    app.router.add_route("OPTIONS","/{path_info:.*}",options_handler)
-    runner=web.AppRunner(app); await runner.setup()
-    await web.TCPSite(runner,"0.0.0.0",PORT).start()
-    log.info(f"Server running on port {PORT}")
+    app = web.Application()
+    app["bot"] = bot
+    app.router.add_get("/", serve_index)
+    app.router.add_get("/api/me", api_me)
+    app.router.add_get("/api/schedule", api_schedule)
+    app.router.add_get("/api/queue/{class_id}", api_queue_detail)
+    app.router.add_post("/api/queue/{class_id}/join", api_join)
+    app.router.add_post("/api/queue/{class_id}/leave", api_leave)
+    app.router.add_get("/api/admin/subjects", api_admin_subjects)
+    app.router.add_post("/api/admin/subjects", api_admin_subjects)
+    app.router.add_post("/api/admin/classes", api_admin_classes)
+    app.router.add_post("/api/admin/queue/{queue_id}/{action}", api_admin_queue_action)
+    app.router.add_post("/api/admin/mark", api_admin_mark)
+    app.router.add_route("OPTIONS", "/{path_info:.*}", options_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, "0.0.0.0", PORT).start()
+    log.info("Server running on port %s", PORT)
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 
 def run() -> None:
-    """Run the application with the Windows event-loop workaround when needed."""
-    if sys.platform=="win32":
+    if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main())
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     run()
