@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sys
+import urllib.parse
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -18,10 +19,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
+    BotCommand,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
+    MenuButtonWebApp,
     Message,
     ReplyKeyboardMarkup,
     WebAppInfo,
@@ -279,18 +282,23 @@ async def kb_import_hint(msg: Message) -> None:
 
 
 async def fetch_group_schedule(group_name: str) -> Optional[dict]:
-    url = f"https://timetable.mirea.ru/api/schedule/groups/{group_name}"
+    encoded = urllib.parse.quote(group_name, safe="")
+    url = f"https://timetable.mirea.ru/api/schedule/groups/{encoded}"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                log.info("Schedule API [%s] status=%d url=%s", group_name, resp.status, url)
                 if resp.status == 404:
                     return None
-                resp.raise_for_status()
+                if resp.status != 200:
+                    body = await resp.text()
+                    log.warning("Schedule API non-200 for %s: %d — %s", group_name, resp.status, body[:200])
+                    return None
                 data = await resp.json(content_type=None)
-                log.debug("Schedule API response keys for %s: %s", group_name, list(data.keys()) if isinstance(data, dict) else type(data))
+                log.info("Schedule API response keys for %s: %s", group_name, list(data.keys()) if isinstance(data, dict) else type(data))
                 return data
     except Exception:
-        log.exception("Failed to fetch schedule for %s", group_name)
+        log.exception("Failed to fetch schedule for %s from %s", group_name, url)
         return None
 
 
@@ -1247,10 +1255,12 @@ async def api_validate_group(request: web.Request) -> web.Response:
     group = request.rel_url.query.get("group", "").strip().upper()
     if not group:
         return json_response({"valid": False, "error": "Не указана группа"})
-    url = f"https://timetable.mirea.ru/api/schedule/groups/{group}"
+    encoded = urllib.parse.quote(group, safe="")
+    url = f"https://timetable.mirea.ru/api/schedule/groups/{encoded}"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                log.info("Validate group %s → status %d", group, resp.status)
                 if resp.status == 200:
                     return json_response({"valid": True})
                 return json_response({"valid": False, "error": "Группа не найдена в системе МИРЭА"})
@@ -1360,6 +1370,26 @@ def create_bot() -> Bot:
 async def main() -> None:
     bot = create_bot()
     await db.init()
+
+    # Set persistent WebApp button and command list for all users
+    try:
+        await bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(text="📅 Очереди", web_app=WebAppInfo(url=WEB_URL))
+        )
+        log.info("Chat menu button set to WebApp: %s", WEB_URL)
+    except Exception:
+        log.warning("Could not set chat menu button (requires HTTPS and valid bot token)")
+
+    commands = [
+        BotCommand(command="start", description="Запустить бота / главное меню"),
+        BotCommand(command="myqueue", description="Мои записи в очередях"),
+        BotCommand(command="help", description="Помощь"),
+    ]
+    try:
+        await bot.set_my_commands(commands)
+    except Exception:
+        log.warning("Could not set bot commands")
+
     app = web.Application()
     app["bot"] = bot
     app.router.add_get("/", serve_index)
