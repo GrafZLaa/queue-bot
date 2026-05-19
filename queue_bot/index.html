@@ -592,7 +592,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
           <div class="calendar-month" id="month-label">Май 2026</div>
           <button class="icon-button" onclick="changeMonth(1)">›</button>
         </div>
-        <div class="week-stat" id="week-label">20 неделя</div>
+        <div class="week-stat" id="week-label"></div>
         <div class="month-grid" id="month-grid"></div>
       </aside>
       <section>
@@ -623,12 +623,6 @@ button:focus-visible, input:focus-visible, select:focus-visible {
           <div class="field"><label>Название</label><input id="new-subject-name" placeholder="Теория вероятностей"></div>
           <div class="field"><label>Группа</label><input id="new-subject-group" placeholder="ИКБО-01-23 или пусто"></div>
           <button class="primary-button" onclick="createSubject()">Добавить</button>
-        </div>
-        <div class="form-panel" style="margin-top:16px">
-          <h2>Расписание ИКБО-42-24</h2>
-          <p class="muted" style="margin:0 0 12px">Загрузить встроенное расписание группы на недели 15–18 (май–июнь 2026)</p>
-          <button class="primary-button" onclick="seedSchedule()">Загрузить расписание</button>
-          <div id="seed-status" style="margin-top:8px;font-size:13px"></div>
         </div>
         <div class="form-panel" style="margin-top:16px">
           <h2>Новая пара</h2>
@@ -671,14 +665,9 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 </div>
 <div class="modal-backdrop" id="reg-backdrop" style="display:none;align-items:center;justify-content:center;padding:24px">
   <div class="modal" style="max-width:400px">
-    <div class="modal-head"><div><h2>Добро пожаловать!</h2><div class="muted">Заполните данные для входа</div></div></div>
+    <div class="modal-head"><div><h2>Добро пожаловать!</h2><div class="muted">Группа ИКБО-42-24 — подтвердите ваше ФИО</div></div></div>
     <div id="reg-body">
       <div class="field"><label>ФИО</label><input id="reg-name" placeholder="Иванов Иван Иванович"></div>
-      <div class="field">
-        <label>Учебная группа</label>
-        <input id="reg-group" placeholder="ИКБО-01-23" oninput="onGroupInput()">
-        <div id="reg-group-hint" style="font-size:12px;margin-top:5px;min-height:16px;color:var(--muted)"></div>
-      </div>
       <button class="primary-button" style="width:100%;height:40px" id="reg-submit-btn" onclick="submitRegistration()">Войти</button>
     </div>
   </div>
@@ -726,7 +715,13 @@ function isoDate(d) {
 function sameDay(a, b) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
+const _SEM_START = new Date('2026-02-09').getTime();
 function weekNumber(date) {
+  const ms = new Date(date).setHours(0,0,0,0) - _SEM_START;
+  if (ms < 0) return null;
+  return Math.floor(ms / (7 * 24 * 60 * 60 * 1000)) + 1;
+}
+function _isoWeekNumber_unused(date) {
   const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
   const day = d.getUTCDay() || 7;
   d.setUTCDate(d.getUTCDate() + 4 - day);
@@ -767,7 +762,8 @@ async function loadMonthCounts() {
 }
 function renderCalendarGrid() {
   document.getElementById('month-label').textContent = `${MONTHS[cursor.getMonth()]} ${cursor.getFullYear()}`;
-  document.getElementById('week-label').textContent = `${weekNumber(selected)} неделя`;
+  const _aw = weekNumber(selected);
+  document.getElementById('week-label').textContent = _aw ? `${_aw} неделя семестра` : '';
   const grid = document.getElementById('month-grid');
   grid.innerHTML = WEEKDAYS.map(day => `<div class="weekday">${day}</div>`).join('');
   const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
@@ -1067,56 +1063,13 @@ function showRegModal() {
 function hideRegModal() {
   document.getElementById('reg-backdrop').style.display = 'none';
 }
-let _groupValidateTimer = null;
-function onGroupInput() {
-  const hint = document.getElementById('reg-group-hint');
-  hint.style.color = 'var(--muted)';
-  hint.textContent = '';
-  clearTimeout(_groupValidateTimer);
-  const group = document.getElementById('reg-group').value.trim().toUpperCase();
-  if (group.length < 4) return;
-  hint.textContent = '⏳ Проверка…';
-  _groupValidateTimer = setTimeout(async () => {
-    const res = await apiGet(`/api/validate_group?group=${encodeURIComponent(group)}`).catch(() => ({ valid: null }));
-    if (res.valid === true) {
-      hint.style.color = 'var(--green)';
-      hint.textContent = '✓ Группа найдена в системе МИРЭА';
-    } else if (res.valid === false) {
-      hint.style.color = 'var(--red)';
-      hint.textContent = `✗ ${res.error || 'Группа не найдена'}`;
-    } else {
-      hint.style.color = 'var(--yellow)';
-      hint.textContent = '⚠ Не удалось проверить, но можно продолжить';
-    }
-  }, 700);
-}
 async function submitRegistration() {
   const name = document.getElementById('reg-name').value.trim();
-  const group = document.getElementById('reg-group').value.trim().toUpperCase();
-  const hint = document.getElementById('reg-group-hint');
   if (!name || name.split(' ').length < 2) { showToast('Введите ФИО (минимум два слова)'); return; }
-  if (!group) { showToast('Введите группу'); return; }
   const btn = document.getElementById('reg-submit-btn');
   btn.disabled = true;
-  btn.textContent = '⏳ Проверка…';
-  hint.textContent = '⏳ Проверяем группу...';
-  hint.style.color = 'var(--muted)';
-  const validation = await apiGet(`/api/validate_group?group=${encodeURIComponent(group)}`).catch(() => ({ valid: null }));
-  if (validation.valid === false) {
-    hint.style.color = 'var(--red)';
-    hint.textContent = `✗ ${validation.error || 'Группа не найдена'}`;
-    btn.disabled = false;
-    btn.textContent = 'Войти';
-    return;
-  }
-  if (validation.valid === true) {
-    hint.style.color = 'var(--green)';
-    hint.textContent = '✓ Группа подтверждена';
-  } else {
-    hint.style.color = 'var(--yellow)';
-    hint.textContent = '⚠ Сервис недоступен, продолжаем без проверки';
-  }
-  const result = await apiPost('/api/register', { name, group });
+  btn.textContent = '⏳ Вход…';
+  const result = await apiPost('/api/register', { name });
   btn.disabled = false;
   btn.textContent = 'Войти';
   if (result.status === 'ok') {
@@ -1128,7 +1081,6 @@ async function submitRegistration() {
     await renderMonth();
   } else {
     showToast(result.error || 'Ошибка регистрации');
-    hint.textContent = '';
   }
 }
 function showToast(message) {

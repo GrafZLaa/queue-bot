@@ -199,7 +199,7 @@ async def cmd_start(msg: Message, state: FSMContext) -> None:
     first = tg_user.first_name or ""
     last = tg_user.last_name or ""
     name = f"{first} {last}".strip() or tg_user.username or "Пользователь"
-    user = await db.ensure_user(tg_user.id, tg_user.username, name, None)
+    user = await db.ensure_user(tg_user.id, tg_user.username, name, "ИКБО-42-24")
     await msg.answer(
         f"👋 Привет, *{user['full_name']}*!\n\n"
         "Я помогаю управлять очередями на сдачу практических работ в *РТУ МИРЭА*.\n\n"
@@ -1202,13 +1202,12 @@ async def api_register(request: web.Request) -> web.Response:
     profile = await telegram_profile_from_request(request, data, required=True)
     tg_id = int(profile["id"])
     name = (data.get("name") or "").strip()
-    group = (data.get("group") or "").strip().upper() or None
     if len(name.split()) < 2:
-        # use Telegram name if not provided properly
         first = profile.get("first_name", "")
         last = profile.get("last_name", "")
         name = f"{first} {last}".strip() or name
-    user = await db.ensure_user(tg_id, profile.get("username"), name, group)
+    # Group is always ИКБО-42-24 — single-group bot
+    user = await db.ensure_user(tg_id, profile.get("username"), name, "ИКБО-42-24")
     return json_response({"status": "ok", "user": user})
 
 
@@ -1459,6 +1458,7 @@ def create_bot() -> Bot:
 async def main() -> None:
     bot = create_bot()
     await db.init()
+    await db.seed_ikbo_42_24()  # auto-seed on first launch, no-op if already done
 
     # Set persistent WebApp button and command list for all users
     try:
