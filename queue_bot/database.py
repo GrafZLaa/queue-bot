@@ -11,16 +11,17 @@ DEFAULT_DURATION_MINUTES = 90
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    telegram_id   INTEGER UNIQUE NOT NULL,
-    username      TEXT,
-    full_name     TEXT NOT NULL,
-    group_name    TEXT,
-    rating        INTEGER DEFAULT 50,
-    category      TEXT DEFAULT 'middle',
-    on_time       INTEGER DEFAULT 0,
-    late          INTEGER DEFAULT 0,
-    no_show       INTEGER DEFAULT 0
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id    INTEGER UNIQUE NOT NULL,
+    username       TEXT,
+    full_name      TEXT NOT NULL,
+    group_name     TEXT,
+    name_confirmed INTEGER DEFAULT 0,
+    rating         INTEGER DEFAULT 50,
+    category       TEXT DEFAULT 'middle',
+    on_time        INTEGER DEFAULT 0,
+    late           INTEGER DEFAULT 0,
+    no_show        INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS subjects (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,6 +114,8 @@ async def _migrate() -> None:
     async with connect_db() as db:
         if "group_name" not in user_columns:
             await db.execute("ALTER TABLE users ADD COLUMN group_name TEXT")
+        if "name_confirmed" not in user_columns:
+            await db.execute("ALTER TABLE users ADD COLUMN name_confirmed INTEGER DEFAULT 0")
         if "duration_minutes" not in class_columns:
             await db.execute(
                 "ALTER TABLE classes ADD COLUMN duration_minutes INTEGER DEFAULT 90"
@@ -216,6 +219,29 @@ async def set_group(user_id: int, group_name: Optional[str]) -> None:
             (_clean_group(group_name), user_id),
         )
         await db.commit()
+
+
+async def set_name_confirmed(tg_id: int) -> None:
+    async with connect_db() as db:
+        await db.execute(
+            "UPDATE users SET name_confirmed=1 WHERE telegram_id=?", (tg_id,)
+        )
+        await db.commit()
+
+
+async def get_classes_to_auto_open(from_iso: str, until_iso: str) -> list[dict]:
+    """Return classes whose pending queues should be opened (class starts within window)."""
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT c.id FROM classes c
+            JOIN queues q ON q.class_id = c.id
+            WHERE q.status = 'pending'
+              AND c.dt BETWEEN ? AND ?
+            """,
+            (from_iso, until_iso),
+        )
+        return [dict(r) for r in await cur.fetchall()]
 
 
 async def apply_rating(user_id: int, kind: str) -> None:
@@ -609,63 +635,82 @@ async def class_counts_for_month(year: int, month: int, group_name: Optional[str
 
 _SEED_GROUP = "ИКБО-42-24"
 
-# (subject_name, date YYYY-MM-DD, time_start HH:MM, time_end HH:MM, room, teacher)
-_SEED_CLASSES: list[tuple[str, str, str, str, str, str]] = [
-    # ── Теория вероятностей и МС ──────────────────────────────────────
-    ("ТВиМС (лек)",  "2026-05-18", "09:00", "10:30", "А-407", "Сидоров А.В."),
-    ("ТВиМС (лек)",  "2026-05-25", "09:00", "10:30", "А-407", "Сидоров А.В."),
-    ("ТВиМС (лек)",  "2026-06-01", "09:00", "10:30", "А-407", "Сидоров А.В."),
-    ("ТВиМС (лек)",  "2026-06-08", "09:00", "10:30", "А-407", "Сидоров А.В."),
-    ("ТВиМС (пр)",   "2026-05-20", "14:20", "15:50", "Б-315", "Сидоров А.В."),
-    ("ТВиМС (пр)",   "2026-05-27", "14:20", "15:50", "Б-315", "Сидоров А.В."),
-    ("ТВиМС (пр)",   "2026-06-03", "14:20", "15:50", "Б-315", "Сидоров А.В."),
-    # ── Алгоритмы и структуры данных ──────────────────────────────────
-    ("АиСД (лек)",   "2026-05-25", "14:20", "15:50", "Д-101", "Петрова И.В."),
-    ("АиСД (лек)",   "2026-06-01", "14:20", "15:50", "Д-101", "Петрова И.В."),
-    ("АиСД (пр)",    "2026-05-19", "10:40", "12:10", "В-503", "Козлов М.И."),
-    ("АиСД (пр)",    "2026-06-02", "10:40", "12:10", "В-503", "Козлов М.И."),
-    ("АиСД (пр)",    "2026-06-09", "10:40", "12:10", "В-503", "Козлов М.И."),
-    # ── Операционные системы ──────────────────────────────────────────
-    ("ОС (лек)",     "2026-05-20", "09:00", "10:30", "А-310", "Волков Д.Н."),
-    ("ОС (лек)",     "2026-05-27", "09:00", "10:30", "А-310", "Волков Д.Н."),
-    ("ОС (лек)",     "2026-06-03", "09:00", "10:30", "А-310", "Волков Д.Н."),
-    ("ОС (пр)",      "2026-05-22", "14:20", "15:50", "Б-420", "Иванов А.П."),
-    ("ОС (пр)",      "2026-06-05", "14:20", "15:50", "Б-420", "Иванов А.П."),
-    ("ОС (пр)",      "2026-06-12", "14:20", "15:50", "Б-420", "Иванов А.П."),
-    # ── Компьютерные сети ─────────────────────────────────────────────
-    ("КС (лек)",     "2026-05-21", "09:00", "10:30", "А-401", "Смирнов К.О."),
-    ("КС (лек)",     "2026-05-28", "09:00", "10:30", "А-401", "Смирнов К.О."),
-    ("КС (лек)",     "2026-06-04", "09:00", "10:30", "А-401", "Смирнов К.О."),
-    ("КС (лаб)",     "2026-05-21", "16:20", "17:50", "Б-205", "Смирнов К.О."),
-    ("КС (лаб)",     "2026-06-04", "16:20", "17:50", "Б-205", "Смирнов К.О."),
-    # ── Объектно-ориентированное программирование ──────────────────────
-    ("ООП (пр)",     "2026-05-20", "12:40", "14:10", "В-302", "Новикова Е.С."),
-    ("ООП (пр)",     "2026-05-27", "12:40", "14:10", "В-302", "Новикова Е.С."),
-    ("ООП (пр)",     "2026-06-03", "12:40", "14:10", "В-302", "Новикова Е.С."),
-    ("ООП (пр)",     "2026-06-10", "12:40", "14:10", "В-302", "Новикова Е.С."),
+# (subject_name, time_start, time_end, room, teacher, [dates YYYY-MM-DD])
+_SEED_CLASSES: list[tuple[str, str, str, str, str, list[str]]] = [
+    # ── Понедельник (2 пары) ─────────────────────────────────────────
+    ("ТРПП (лек)",                      "12:40", "14:10", "А-300",    "Разумов А.С.",
+     ["2026-05-18", "2026-05-25", "2026-06-01", "2026-06-08"]),
+    ("Криптография и ЗИ (лек)",         "16:20", "17:50", "В-209",    "Морозов Д.Н.",
+     ["2026-05-18", "2026-05-25", "2026-06-01", "2026-06-08"]),
+    # ── Вторник (3 пары) ─────────────────────────────────────────────
+    ("Многоагентное моделирование (лек)","09:00", "10:30", "Г-112",    "Павлова Е.А.",
+     ["2026-05-19", "2026-05-26", "2026-06-02", "2026-06-09"]),
+    ("Проектирование баз данных (пр)",  "10:40", "12:10", "И-212-а",  "Копылова Я.А.",
+     ["2026-05-19", "2026-05-26", "2026-06-02", "2026-06-09"]),
+    ("ТРПП (пр)",                       "14:20", "15:50", "А-301",    "Разумов А.С.",
+     ["2026-05-19", "2026-05-26", "2026-06-02", "2026-06-09"]),
+    # ── Среда (3 пары) ───────────────────────────────────────────────
+    ("Проектирование баз данных (лек)", "09:00", "10:30", "А-405",    "Копылова Я.А.",
+     ["2026-05-20", "2026-05-27", "2026-06-03", "2026-06-10"]),
+    ("Иностранный язык",                "10:40", "12:10", "Г-305",    "Смирнова О.В.",
+     ["2026-05-20", "2026-05-27", "2026-06-03", "2026-06-10"]),
+    ("Многоагентное моделирование (лаб)","14:20", "15:50", "Б-120",   "Павлова Е.А.",
+     ["2026-05-20", "2026-05-27", "2026-06-03", "2026-06-10"]),
+    # ── Четверг (5 пар) ──────────────────────────────────────────────
+    ("Криптография и ЗИ (пр)",          "09:00", "10:30", "В-210",    "Морозов Д.Н.",
+     ["2026-05-21", "2026-05-28", "2026-06-04", "2026-06-11"]),
+    ("ТРПП (лаб)",                      "10:40", "12:10", "Б-402",    "Разумов А.С.",
+     ["2026-05-21", "2026-05-28", "2026-06-04", "2026-06-11"]),
+    ("Физическая культура",             "12:40", "14:10", "Спортзал", "Соколов В.П.",
+     ["2026-05-21", "2026-05-28", "2026-06-04", "2026-06-11"]),
+    ("Проектирование баз данных (лаб)", "14:20", "15:50", "И-212-б",  "Копылова Я.А.",
+     ["2026-05-21", "2026-05-28", "2026-06-04", "2026-06-11"]),
+    ("Мат. основы ЗИ (пр)",            "16:20", "17:50", "В-403",    "Петров А.В.",
+     ["2026-05-21", "2026-05-28", "2026-06-04", "2026-06-11"]),
+    # ── Пятница (3 пары) ─────────────────────────────────────────────
+    ("Многоагентное моделирование (пр)","09:00", "10:30", "Б-215",    "Павлова Е.А.",
+     ["2026-05-22", "2026-05-29", "2026-06-05", "2026-06-12"]),
+    ("Иностранный язык",                "10:40", "12:10", "Г-306",    "Смирнова О.В.",
+     ["2026-05-22", "2026-05-29", "2026-06-05", "2026-06-12"]),
+    ("Криптография и ЗИ (лаб)",        "14:20", "15:50", "В-211",    "Морозов Д.Н.",
+     ["2026-05-22", "2026-05-29", "2026-06-05", "2026-06-12"]),
+    # ── Суббота (2 пары) ─────────────────────────────────────────────
+    ("Мат. основы ЗИ (лек)",           "09:00", "10:30", "А-202",    "Петров А.В.",
+     ["2026-05-23", "2026-05-30", "2026-06-06", "2026-06-13"]),
+    ("Физическая культура",             "10:40", "12:10", "Спортзал", "Соколов В.П.",
+     ["2026-05-23", "2026-05-30", "2026-06-06", "2026-06-13"]),
 ]
 
 
 async def seed_ikbo_42_24() -> dict:
-    """Seed demo schedule for ИКБО-42-24 (weeks 15–18, Spring 2026)."""
+    """Seed correct schedule for ИКБО-42-24 (weeks 15–18, Spring 2026)."""
     existing = await all_subjects(_SEED_GROUP)
     if existing:
         return {"status": "already_seeded", "count": len(existing)}
 
     subject_cache: dict[str, int] = {}
     imported = 0
-    for subj_name, date, t_start, t_end, room, teacher in _SEED_CLASSES:
+    for subj_name, t_start, t_end, room, teacher, dates in _SEED_CLASSES:
         if subj_name not in subject_cache:
             subject_cache[subj_name] = await add_subject(subj_name, _SEED_GROUP)
         sid = subject_cache[subj_name]
         t0 = datetime.strptime(t_start, "%H:%M")
         t1 = datetime.strptime(t_end, "%H:%M")
         duration = int((t1 - t0).total_seconds() / 60)
-        dt_str = f"{date}T{t_start}:00"
-        if not await class_exists_by_subject_dt(sid, dt_str):
-            await add_class(sid, dt_str, room, teacher, duration)
-            imported += 1
+        for date in dates:
+            dt_str = f"{date}T{t_start}:00"
+            if not await class_exists_by_subject_dt(sid, dt_str):
+                await add_class(sid, dt_str, room, teacher, duration)
+                imported += 1
     return {"status": "ok", "imported": imported}
+
+
+async def reseed_ikbo_42_24() -> dict:
+    """Delete existing ИКБО-42-24 schedule and reseed with correct data."""
+    async with connect_db() as db:
+        await db.execute("DELETE FROM subjects WHERE group_name=?", (_SEED_GROUP,))
+        await db.commit()
+    return await seed_ikbo_42_24()
 
 
 async def class_exists_by_subject_dt(subject_id: int, dt: str) -> bool:

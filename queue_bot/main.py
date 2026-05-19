@@ -409,7 +409,7 @@ async def cmd_seed(msg: Message) -> None:
     if result["status"] == "already_seeded":
         await progress.edit_text(
             f"ℹ️ Расписание уже загружено ({result['count']} предметов).\n"
-            f"Для сброса обратитесь к разработчику.",
+            f"Используйте /reseed для полного сброса.",
         )
     else:
         await progress.edit_text(
@@ -418,6 +418,39 @@ async def cmd_seed(msg: Message) -> None:
             f"Охват: недели 15–18 (май–июнь 2026)",
             parse_mode="Markdown",
         )
+
+
+@dp.message(Command("reseed"))
+async def cmd_reseed(msg: Message) -> None:
+    if not is_admin_id(msg.from_user.id):
+        return
+    progress = await msg.answer("⏳ Сброс и повторная загрузка расписания ИКБО-42-24...")
+    result = await db.reseed_ikbo_42_24()
+    await progress.edit_text(
+        f"✅ Расписание ИКБО-42-24 обновлено!\n"
+        f"Создано занятий: *{result['imported']}*\n\n"
+        f"Охват: недели 15–18 (май–июнь 2026)",
+        parse_mode="Markdown",
+    )
+
+
+async def auto_open_queues_task(bot: Bot) -> None:
+    """Background task: auto-open queues 90 minutes before each class."""
+    while True:
+        await asyncio.sleep(60)
+        try:
+            now = datetime.now()
+            from_iso = (now - timedelta(minutes=5)).isoformat()
+            until_iso = (now + timedelta(minutes=90)).isoformat()
+            classes = await db.get_classes_to_auto_open(from_iso, until_iso)
+            for row in classes:
+                queue = await db.queue_for_class(row["id"])
+                if queue and queue["status"] == "pending":
+                    await db.set_queue_status(queue["id"], "open")
+                    await notify_queue_open(bot, row["id"])
+                    log.info("Auto-opened queue for class_id=%s", row["id"])
+        except Exception:
+            log.exception("Error in auto_open_queues_task")
 
 
 @dp.message(Command("import"))
@@ -1208,6 +1241,8 @@ async def api_register(request: web.Request) -> web.Response:
         name = f"{first} {last}".strip() or name
     # Group is always ИКБО-42-24 — single-group bot
     user = await db.ensure_user(tg_id, profile.get("username"), name, "ИКБО-42-24")
+    await db.set_name_confirmed(tg_id)
+    user["name_confirmed"] = 1
     return json_response({"status": "ok", "user": user})
 
 
@@ -1334,6 +1369,13 @@ async def api_seed(request: web.Request) -> web.Response:
     data = await request_json(request)
     await require_admin_user(request, data)
     result = await db.seed_ikbo_42_24()
+    return json_response(result)
+
+
+async def api_reseed(request: web.Request) -> web.Response:
+    data = await request_json(request)
+    await require_admin_user(request, data)
+    result = await db.reseed_ikbo_42_24()
     return json_response(result)
 
 
@@ -1490,6 +1532,7 @@ async def main() -> None:
     app.router.add_post("/api/queue/{class_id}/join", api_join)
     app.router.add_post("/api/queue/{class_id}/leave", api_leave)
     app.router.add_post("/api/seed", api_seed)
+    app.router.add_post("/api/reseed", api_reseed)
     app.router.add_get("/api/validate_group", api_validate_group)
     app.router.add_post("/api/import/schedule", api_import_schedule)
     app.router.add_get("/api/admin/subjects", api_admin_subjects)
@@ -1502,6 +1545,7 @@ async def main() -> None:
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     log.info("Server running on port %s", PORT)
+    asyncio.create_task(auto_open_queues_task(bot))
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 

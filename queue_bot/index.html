@@ -638,6 +638,12 @@ button:focus-visible, input:focus-visible, select:focus-visible {
       <div>
         <h2>Предметы</h2>
         <div class="subject-list" id="admin-subjects"></div>
+        <div class="form-panel" style="margin-top:16px">
+          <h2>Расписание ИКБО-42-24</h2>
+          <div class="muted" style="margin-bottom:10px">Сброс и повторная загрузка актуального расписания</div>
+          <button class="danger-button" onclick="reseedSchedule()">Обновить расписание</button>
+          <div id="reseed-status" style="margin-top:8px;font-size:13px"></div>
+        </div>
       </div>
     </div>
   </section>
@@ -749,7 +755,7 @@ async function loadMe() {
   document.getElementById('profile-name').textContent = profileName || 'Гость';
   document.getElementById('admin-services').classList.toggle('hidden', !me.is_admin);
   document.getElementById('student-services').classList.toggle('hidden', me.is_admin);
-  if (me.authenticated && (!me.registered || !me.user?.group_name)) {
+  if (me.authenticated && (!me.registered || !me.user?.name_confirmed)) {
     showRegModal();
   }
 }
@@ -1055,6 +1061,21 @@ async function seedSchedule() {
     status.textContent = `✗ ${result.error || 'Ошибка'}`;
   }
 }
+async function reseedSchedule() {
+  const status = document.getElementById('reseed-status');
+  status.style.color = 'var(--muted)';
+  status.textContent = '⏳ Сброс и загрузка…';
+  const result = await apiPost('/api/reseed');
+  if (result.status === 'ok') {
+    status.style.color = 'var(--green)';
+    status.textContent = `✓ Загружено занятий: ${result.imported}`;
+    await loadAdminData();
+    await renderMonth();
+  } else {
+    status.style.color = 'var(--red)';
+    status.textContent = `✗ ${result.error || 'Ошибка'}`;
+  }
+}
 function showRegModal() {
   const name = `${TG_USER?.first_name || ''} ${TG_USER?.last_name || ''}`.trim();
   document.getElementById('reg-name').value = name;
@@ -1074,7 +1095,7 @@ async function submitRegistration() {
   btn.textContent = 'Войти';
   if (result.status === 'ok') {
     me.registered = true;
-    me.user = result.user;
+    me.user = { ...result.user, name_confirmed: 1 };
     hideRegModal();
     document.getElementById('profile-name').textContent = result.user.full_name;
     await renderClasses();
