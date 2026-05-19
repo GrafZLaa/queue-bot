@@ -400,6 +400,26 @@ async def import_schedule_to_db(
     return {"imported": imported, "skipped": skipped}
 
 
+@dp.message(Command("seed"))
+async def cmd_seed(msg: Message) -> None:
+    if not is_admin_id(msg.from_user.id):
+        return
+    progress = await msg.answer("⏳ Заполняю расписание ИКБО-42-24...")
+    result = await db.seed_ikbo_42_24()
+    if result["status"] == "already_seeded":
+        await progress.edit_text(
+            f"ℹ️ Расписание уже загружено ({result['count']} предметов).\n"
+            f"Для сброса обратитесь к разработчику.",
+        )
+    else:
+        await progress.edit_text(
+            f"✅ Расписание ИКБО-42-24 загружено!\n"
+            f"Создано занятий: *{result['imported']}*\n\n"
+            f"Охват: недели 15–18 (май–июнь 2026)",
+            parse_mode="Markdown",
+        )
+
+
 @dp.message(Command("import"))
 async def cmd_import(msg: Message) -> None:
     if not is_admin_id(msg.from_user.id):
@@ -1311,6 +1331,13 @@ async def api_leave(request: web.Request) -> web.Response:
     return json_response({"status": "ok"})
 
 
+async def api_seed(request: web.Request) -> web.Response:
+    data = await request_json(request)
+    await require_admin_user(request, data)
+    result = await db.seed_ikbo_42_24()
+    return json_response(result)
+
+
 async def api_validate_group(request: web.Request) -> web.Response:
     group = request.rel_url.query.get("group", "").strip().upper()
     if not group:
@@ -1462,6 +1489,7 @@ async def main() -> None:
     app.router.add_get("/api/queue/{class_id}", api_queue_detail)
     app.router.add_post("/api/queue/{class_id}/join", api_join)
     app.router.add_post("/api/queue/{class_id}/leave", api_leave)
+    app.router.add_post("/api/seed", api_seed)
     app.router.add_get("/api/validate_group", api_validate_group)
     app.router.add_post("/api/import/schedule", api_import_schedule)
     app.router.add_get("/api/admin/subjects", api_admin_subjects)

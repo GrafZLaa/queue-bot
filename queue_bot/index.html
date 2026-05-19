@@ -625,15 +625,10 @@ button:focus-visible, input:focus-visible, select:focus-visible {
           <button class="primary-button" onclick="createSubject()">Добавить</button>
         </div>
         <div class="form-panel" style="margin-top:16px">
-          <h2>Импорт расписания из МИРЭА</h2>
-          <p class="muted" style="margin:0 0 12px">Загрузить занятия из системы расписания timetable.mirea.ru</p>
-          <div class="field"><label>Группа</label><input id="import-group" placeholder="ИКБО-01-23"></div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-            <div class="field"><label>Неделя с</label><input id="import-week-from" type="number" value="1" min="1" max="18"></div>
-            <div class="field"><label>по</label><input id="import-week-to" type="number" value="18" min="1" max="18"></div>
-          </div>
-          <button class="primary-button" onclick="importSchedule()">Импортировать</button>
-          <div id="import-status" style="margin-top:8px;font-size:13px"></div>
+          <h2>Расписание ИКБО-42-24</h2>
+          <p class="muted" style="margin:0 0 12px">Загрузить встроенное расписание группы на недели 15–18 (май–июнь 2026)</p>
+          <button class="primary-button" onclick="seedSchedule()">Загрузить расписание</button>
+          <div id="seed-status" style="margin-top:8px;font-size:13px"></div>
         </div>
         <div class="form-panel" style="margin-top:16px">
           <h2>Новая пара</h2>
@@ -1046,20 +1041,19 @@ function formatDateTime(value) {
   const d = new Date(value);
   return `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}.${d.getFullYear()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
-async function importSchedule() {
-  const group = (document.getElementById('import-group').value || '').trim().toUpperCase();
-  const weekFrom = parseInt(document.getElementById('import-week-from').value) || 1;
-  const weekTo = parseInt(document.getElementById('import-week-to').value) || 18;
-  const status = document.getElementById('import-status');
-  if (!group) { showToast('Введите группу'); return; }
+async function seedSchedule() {
+  const status = document.getElementById('seed-status');
   status.style.color = 'var(--muted)';
   status.textContent = '⏳ Загрузка…';
-  const result = await apiPost('/api/import/schedule', { group, week_from: weekFrom, week_to: weekTo });
+  const result = await apiPost('/api/seed');
   if (result.status === 'ok') {
     status.style.color = 'var(--green)';
-    status.textContent = `✓ Создано занятий: ${result.imported}, пропущено: ${result.skipped}`;
+    status.textContent = `✓ Создано занятий: ${result.imported}`;
     await loadAdminData();
     await renderMonth();
+  } else if (result.status === 'already_seeded') {
+    status.style.color = 'var(--yellow)';
+    status.textContent = `ℹ Расписание уже загружено (${result.count} предметов)`;
   } else {
     status.style.color = 'var(--red)';
     status.textContent = `✗ ${result.error || 'Ошибка'}`;
