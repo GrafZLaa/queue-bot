@@ -281,79 +281,121 @@ async def kb_import_hint(msg: Message) -> None:
     )
 
 
+async def fetch_current_week() -> Optional[int]:
+    """Return current academic week number from timetable.mirea.ru, or None on failure."""
+    url = "https://timetable.mirea.ru/api/schedule/current_week"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    if isinstance(data, int):
+                        return data
+                    if isinstance(data, dict):
+                        return data.get("week") or data.get("current_week") or data.get("weekNumber")
+    except Exception as exc:
+        log.warning("fetch_current_week failed: %s", exc)
+    return None
+
+
+def semester_start_from_week(current_week: int) -> datetime:
+    """Infer semester start Monday given the current academic week number."""
+    today = datetime.now()
+    this_monday = today - timedelta(days=today.weekday())
+    return this_monday - timedelta(weeks=current_week - 1)
+
+
 async def fetch_group_schedule(group_name: str) -> Optional[dict]:
     encoded = urllib.parse.quote(group_name, safe="")
-    url = f"https://timetable.mirea.ru/api/schedule/groups/{encoded}"
+    url = f"https://timetable.mirea.ru/api/schedule/{encoded}/full_schedule"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                log.info("Schedule API [%s] status=%d url=%s", group_name, resp.status, url)
+                log.info("Schedule API [%s] status=%d", group_name, resp.status)
                 if resp.status == 404:
                     return None
                 if resp.status != 200:
                     body = await resp.text()
-                    log.warning("Schedule API non-200 for %s: %d — %s", group_name, resp.status, body[:200])
+                    log.warning("Schedule API non-200 for %s: %d — %s", group_name, resp.status, body[:300])
                     return None
                 data = await resp.json(content_type=None)
-                log.info("Schedule API response keys for %s: %s", group_name, list(data.keys()) if isinstance(data, dict) else type(data))
+                log.info("Schedule API keys for %s: %s", group_name, list(data.keys()) if isinstance(data, dict) else type(data))
                 return data
     except Exception:
-        log.exception("Failed to fetch schedule for %s from %s", group_name, url)
+        log.exception("Failed to fetch schedule for %s", group_name)
         return None
 
 
-async def import_schedule_to_db(group_name: str, schedule_data: dict, weeks: list[int]) -> dict:
+async def import_schedule_to_db(
+    group_name: str,
+    schedule_data: dict,
+    weeks: list[int],
+    sem_start: datetime,
+) -> dict:
+    """
+    Parse full_schedule response from timetable.mirea.ru and insert into DB.
+
+    Response shape:
+      {"group": "...", "schedule": {"1": {"lessons": [[lesson, ...], ...]}, "2": {...}, ...}}
+
+    Each day key is "1"–"6" (Mon–Sat). Each lessons entry is a list of slots;
+    each slot is a list of LessonModel dicts:
+      {"name": str, "weeks": [int], "time_start": "HH:MM", "time_end": "HH:MM",
+       "types": str, "teachers": [str], "rooms": [str]}
+    """
     imported = 0
     skipped = 0
     subject_cache: dict[str, int] = {}
 
-    # Collect (day_of_week, lesson) pairs from the API response
-    raw_lessons: list[tuple[int, dict]] = []
-    if isinstance(schedule_data, dict) and "schedule" in schedule_data:
-        for day_data in schedule_data.get("schedule", []):
-            dow = int(day_data.get("day", 1))
-            for lesson in day_data.get("lessons", []):
-                raw_lessons.append((dow, lesson))
-    else:
-        log.warning("Unexpected schedule format for %s: %s", group_name, list(schedule_data.keys()) if isinstance(schedule_data, dict) else type(schedule_data))
+    raw_schedule = schedule_data.get("schedule") if isinstance(schedule_data, dict) else None
+    if not raw_schedule:
+        log.warning("No 'schedule' key in response for %s. Keys: %s", group_name,
+                    list(schedule_data.keys()) if isinstance(schedule_data, dict) else type(schedule_data))
+        return {"imported": 0, "skipped": 0}
 
-    for dow, lesson in raw_lessons:
-        lesson_weeks: list[int] = lesson.get("weeks") or []
-        target_weeks = [w for w in lesson_weeks if w in weeks]
-        if not target_weeks:
-            continue
-
-        subject_title = (lesson.get("subject") or {}).get("title") or "Без названия"
-        lesson_type = lesson.get("lessonType") or "ПЗ"
-        teachers = lesson.get("teachers") or []
-        teacher_name = (teachers[0].get("name") or "").strip() or None if teachers else None
-        rooms = lesson.get("rooms") or []
-        room_name = (rooms[0].get("title") or "").strip() or None if rooms else None
-        calls = lesson.get("calls") or {}
-        time_start = calls.get("time_start") or "09:00"
-        time_end = calls.get("time_end") or "10:30"
+    for day_str, day_data in raw_schedule.items():
         try:
-            t0 = datetime.strptime(time_start, "%H:%M")
-            t1 = datetime.strptime(time_end, "%H:%M")
-            duration = max(15, int((t1 - t0).total_seconds() / 60))
+            dow = int(day_str)  # 1=Mon … 6=Sat
         except ValueError:
-            duration = 90
+            continue
+        slots = day_data.get("lessons", []) if isinstance(day_data, dict) else []
+        for slot in slots:
+            lessons_in_slot = slot if isinstance(slot, list) else [slot]
+            for lesson in lessons_in_slot:
+                lesson_weeks: list[int] = lesson.get("weeks") or []
+                target_weeks = [w for w in lesson_weeks if w in weeks]
+                if not target_weeks:
+                    continue
 
-        full_subject = f"{subject_title} ({lesson_type})"
-        if full_subject not in subject_cache:
-            subject_id = await db.add_subject(full_subject, group_name)
-            subject_cache[full_subject] = subject_id
-        subject_id = subject_cache[full_subject]
+                name = (lesson.get("name") or "Без названия").strip()
+                lesson_type = (lesson.get("types") or "ПЗ").strip()
+                teachers = lesson.get("teachers") or []
+                teacher_name = teachers[0].strip() if teachers else None
+                rooms = lesson.get("rooms") or []
+                room_name = rooms[0].strip() if rooms else None
+                time_start = lesson.get("time_start") or "09:00"
+                time_end = lesson.get("time_end") or "10:30"
+                try:
+                    t0 = datetime.strptime(time_start, "%H:%M")
+                    t1 = datetime.strptime(time_end, "%H:%M")
+                    duration = max(15, int((t1 - t0).total_seconds() / 60))
+                except ValueError:
+                    duration = 90
 
-        for week_num in target_weeks:
-            week_monday = SEMESTER_START + timedelta(weeks=week_num - 1)
-            class_date = week_monday + timedelta(days=dow - 1)
-            dt_str = f"{class_date.strftime('%Y-%m-%d')}T{time_start}:00"
-            if not await db.class_exists_by_subject_dt(subject_id, dt_str):
-                await db.add_class(subject_id, dt_str, room_name, teacher_name, duration)
-                imported += 1
-            else:
-                skipped += 1
+                full_subject = f"{name} ({lesson_type})"
+                if full_subject not in subject_cache:
+                    subject_cache[full_subject] = await db.add_subject(full_subject, group_name)
+                subject_id = subject_cache[full_subject]
+
+                for week_num in target_weeks:
+                    week_monday = sem_start + timedelta(weeks=week_num - 1)
+                    class_date = week_monday + timedelta(days=dow - 1)
+                    dt_str = f"{class_date.strftime('%Y-%m-%d')}T{time_start}:00"
+                    if not await db.class_exists_by_subject_dt(subject_id, dt_str):
+                        await db.add_class(subject_id, dt_str, room_name, teacher_name, duration)
+                        imported += 1
+                    else:
+                        skipped += 1
 
     return {"imported": imported, "skipped": skipped}
 
@@ -366,13 +408,15 @@ async def cmd_import(msg: Message) -> None:
     if len(args) < 2:
         await msg.answer(
             "Использование:\n"
-            "`/import ИКБО-01-23` — текущая и следующие 2 недели\n"
-            "`/import ИКБО-01-23 15 17` — недели 15–17",
+            "`/import ИКБО-42-24` — текущая и следующие 2 недели\n"
+            "`/import ИКБО-42-24 15 17` — недели 15–17\n"
+            "`/import ИКБО-42-24 1 18` — весь семестр",
             parse_mode="Markdown",
         )
         return
     group_name = args[1].upper()
-    current_week = max(1, ((datetime.now() - SEMESTER_START).days // 7) + 1)
+
+    # Determine week range
     if len(args) == 4:
         try:
             wfrom, wto = int(args[2]), int(args[3])
@@ -386,19 +430,35 @@ async def cmd_import(msg: Message) -> None:
             await msg.answer("Номер недели должен быть числом.")
             return
     else:
+        api_week = await fetch_current_week()
+        current_week = api_week or max(1, ((datetime.now() - SEMESTER_START).days // 7) + 1)
         wfrom = current_week
         wto = min(18, current_week + 2)
 
     weeks = list(range(wfrom, wto + 1))
-    progress = await msg.answer(f"⏳ Загружаю расписание группы *{group_name}*...", parse_mode="Markdown")
+
+    # Determine semester start
+    api_week = await fetch_current_week()
+    if api_week:
+        sem_start = semester_start_from_week(api_week)
+        log.info("Semester start from API week %d: %s", api_week, sem_start.date())
+    else:
+        sem_start = SEMESTER_START
+        log.info("Using SEMESTER_START fallback: %s", sem_start.date())
+
+    progress = await msg.answer(
+        f"⏳ Загружаю расписание группы *{group_name}* (недели {wfrom}–{wto})...",
+        parse_mode="Markdown",
+    )
     data = await fetch_group_schedule(group_name)
     if data is None:
         await progress.edit_text(
-            f"❌ Группа *{group_name}* не найдена или сервис расписания недоступен.",
+            f"❌ Группа *{group_name}* не найдена или сервис расписания недоступен.\n\n"
+            f"Проверьте название: например `ИКБО-42-24`",
             parse_mode="Markdown",
         )
         return
-    result = await import_schedule_to_db(group_name, data, weeks)
+    result = await import_schedule_to_db(group_name, data, weeks, sem_start)
     await progress.edit_text(
         f"✅ Импорт завершён — *{group_name}*\n"
         f"Недели: {wfrom}–{wto}\n"
@@ -1256,7 +1316,7 @@ async def api_validate_group(request: web.Request) -> web.Response:
     if not group:
         return json_response({"valid": False, "error": "Не указана группа"})
     encoded = urllib.parse.quote(group, safe="")
-    url = f"https://timetable.mirea.ru/api/schedule/groups/{encoded}"
+    url = f"https://timetable.mirea.ru/api/schedule/{encoded}/full_schedule"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
@@ -1281,7 +1341,9 @@ async def api_import_schedule(request: web.Request) -> web.Response:
     schedule = await fetch_group_schedule(group)
     if schedule is None:
         return json_response({"error": f"Группа {group} не найдена"}, status=404)
-    result = await import_schedule_to_db(group, schedule, weeks)
+    api_week = await fetch_current_week()
+    sem_start = semester_start_from_week(api_week) if api_week else SEMESTER_START
+    result = await import_schedule_to_db(group, schedule, weeks, sem_start)
     return json_response({"status": "ok", **result})
 
 
