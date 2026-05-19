@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Пульс РТУ МИРЭА</title>
+<title>Очереди МИРЭА</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
 :root {
@@ -265,7 +265,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 }
 .date-line {
   display: grid;
-  grid-template-columns: 100px 1fr 1fr;
+  grid-template-columns: 100px 1fr;
   gap: 28px;
   align-items: center;
   margin-bottom: 20px;
@@ -568,8 +568,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 <body>
 <header class="topbar">
   <div class="brand">
-    <div class="brand-mark">РТУ</div>
-    <div class="brand-name">Пульс РТУ МИРЭА</div>
+    <div class="brand-mark">Q</div>
+    <div class="brand-name">Очереди</div>
   </div>
   <nav class="tabs">
     <button class="tab active" data-view="journal" onclick="switchView('journal')"><span class="tab-icon">▣</span>Мои занятия</button>
@@ -584,7 +584,6 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   <section class="surface" id="view-journal">
     <div class="view-title">
       <h1>Журнал студента</h1>
-      <button class="ghost-button" onclick="showQrStub()">▦ Сканер QR-кода</button>
     </div>
     <div class="journal-grid">
       <aside>
@@ -599,7 +598,6 @@ button:focus-visible, input:focus-visible, select:focus-visible {
       <section>
         <div class="date-line">
           <strong id="selected-date">17.05.2026</strong>
-          <span class="muted" id="group-filter">Все группы</span>
           <span class="muted" id="day-summary">Загрузка</span>
         </div>
         <div class="cards" id="classes-list"></div>
@@ -663,6 +661,16 @@ button:focus-visible, input:focus-visible, select:focus-visible {
       <button class="icon-button" onclick="closeModal()">×</button>
     </div>
     <div id="modal-body"></div>
+  </div>
+</div>
+<div class="modal-backdrop" id="reg-backdrop" style="display:none;align-items:center;justify-content:center;padding:24px">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-head"><div><h2>Добро пожаловать!</h2><div class="muted">Заполните данные для входа</div></div></div>
+    <div id="reg-body">
+      <div class="field"><label>ФИО</label><input id="reg-name" placeholder="Иванов Иван Иванович"></div>
+      <div class="field"><label>Учебная группа</label><input id="reg-group" placeholder="ИКБО-01-23"></div>
+      <button class="primary-button" style="width:100%;height:40px" onclick="submitRegistration()">Войти</button>
+    </div>
   </div>
 </div>
 <div id="toast"></div>
@@ -734,29 +742,22 @@ async function loadMe() {
   me = await apiGet('/api/me').catch(() => me);
   const profileName = me.user?.full_name || (TG_USER ? `${TG_USER.first_name || ''} ${TG_USER.last_name || ''}`.trim() : 'Гость');
   document.getElementById('profile-name').textContent = profileName || 'Гость';
-  document.getElementById('group-filter').textContent = me.user?.group_name ? `Группа ${me.user.group_name}` : 'Все группы';
   document.getElementById('admin-services').classList.toggle('hidden', !me.is_admin);
   document.getElementById('student-services').classList.toggle('hidden', me.is_admin);
+  if (me.authenticated && (!me.registered || !me.user?.group_name)) {
+    showRegModal();
+  }
 }
 async function loadMonthCounts() {
   monthCounts = {};
-  const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
-  const start = new Date(first);
-  const shift = (start.getDay() || 7) - 1;
-  start.setDate(start.getDate() - shift);
-  const jobs = [];
-  for (let i = 0; i < 42; i++) {
-    const day = new Date(start);
-    day.setDate(start.getDate() + i);
-    const key = isoDate(day);
-    jobs.push(apiGet(`/api/schedule?date=${key}`).then(data => { monthCounts[key] = (data.classes || []).length; }).catch(() => { monthCounts[key] = 0; }));
-  }
-  await Promise.all(jobs);
+  const year = cursor.getFullYear();
+  const month = cursor.getMonth() + 1;
+  const data = await apiGet(`/api/schedule/month?year=${year}&month=${month}`).catch(() => ({ counts: {} }));
+  monthCounts = data.counts || {};
 }
-async function renderMonth() {
+function renderCalendarGrid() {
   document.getElementById('month-label').textContent = `${MONTHS[cursor.getMonth()]} ${cursor.getFullYear()}`;
   document.getElementById('week-label').textContent = `${weekNumber(selected)} неделя`;
-  await loadMonthCounts();
   const grid = document.getElementById('month-grid');
   grid.innerHTML = WEEKDAYS.map(day => `<div class="weekday">${day}</div>`).join('');
   const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
@@ -773,6 +774,10 @@ async function renderMonth() {
     button.onclick = () => selectDay(day);
     grid.appendChild(button);
   }
+}
+async function renderMonth() {
+  await loadMonthCounts();
+  renderCalendarGrid();
 }
 async function renderClasses() {
   const key = isoDate(selected);
@@ -855,8 +860,10 @@ async function selectDay(day) {
   selected = new Date(day);
   if (cursor.getMonth() !== selected.getMonth() || cursor.getFullYear() !== selected.getFullYear()) {
     cursor = new Date(selected.getFullYear(), selected.getMonth(), 1);
+    await renderMonth();
+  } else {
+    renderCalendarGrid();
   }
-  await renderMonth();
   await renderClasses();
 }
 async function changeMonth(delta) {
@@ -1024,8 +1031,30 @@ function formatDateTime(value) {
   const d = new Date(value);
   return `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}.${d.getFullYear()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
-function showQrStub() {
-  showToast('QR-сканер подключается через Telegram-клиент');
+function showRegModal() {
+  const name = `${TG_USER?.first_name || ''} ${TG_USER?.last_name || ''}`.trim();
+  document.getElementById('reg-name').value = name;
+  document.getElementById('reg-backdrop').style.display = 'flex';
+}
+function hideRegModal() {
+  document.getElementById('reg-backdrop').style.display = 'none';
+}
+async function submitRegistration() {
+  const name = document.getElementById('reg-name').value.trim();
+  const group = document.getElementById('reg-group').value.trim();
+  if (!name || name.split(' ').length < 2) { showToast('Введите ФИО (минимум два слова)'); return; }
+  if (!group) { showToast('Введите группу'); return; }
+  const result = await apiPost('/api/register', { name, group });
+  if (result.status === 'ok') {
+    me.registered = true;
+    me.user = result.user;
+    hideRegModal();
+    document.getElementById('profile-name').textContent = result.user.full_name;
+    await renderClasses();
+    await renderMonth();
+  } else {
+    showToast(result.error || 'Ошибка регистрации');
+  }
 }
 function showToast(message) {
   const toast = document.getElementById('toast');

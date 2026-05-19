@@ -579,6 +579,34 @@ async def user_active_entries(user_id: int) -> list[dict]:
         return [dict(r) for r in await cur.fetchall()]
 
 
+async def class_counts_for_month(year: int, month: int, group_name: Optional[str] = None) -> dict[str, int]:
+    prefix = f"{year:04d}-{month:02d}-%"
+    group_name = _clean_group(group_name)
+    async with connect_db() as db:
+        if group_name:
+            cur = await db.execute(
+                """
+                SELECT substr(c.dt, 1, 10) AS day, COUNT(*) AS cnt
+                FROM classes c JOIN subjects s ON c.subject_id=s.id
+                WHERE c.dt LIKE ?
+                  AND (s.group_name IS NULL OR s.group_name='' OR s.group_name=?)
+                GROUP BY day
+                """,
+                (prefix, group_name),
+            )
+        else:
+            cur = await db.execute(
+                """
+                SELECT substr(c.dt, 1, 10) AS day, COUNT(*) AS cnt
+                FROM classes c JOIN subjects s ON c.subject_id=s.id
+                WHERE c.dt LIKE ?
+                GROUP BY day
+                """,
+                (prefix,),
+            )
+        return {row["day"]: row["cnt"] for row in await cur.fetchall()}
+
+
 async def user_entries_for_queues(user_id: int, queue_ids: list[int]) -> dict[int, dict]:
     """Return {queue_id: entry} for a user across the given queue IDs."""
     if not queue_ids:

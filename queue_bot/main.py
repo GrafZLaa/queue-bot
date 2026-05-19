@@ -55,10 +55,8 @@ STAT_LABEL = {
 
 
 class Form(StatesGroup):
-    """FSM states for Telegram registration and admin data entry."""
+    """FSM states for admin data entry."""
 
-    register_name = State()
-    register_group = State()
     subj_name = State()
     subj_group = State()
     cls_dt = State()
@@ -180,25 +178,15 @@ def is_admin(cq: CallbackQuery) -> bool:
 
 @dp.message(Command("start"))
 async def cmd_start(msg: Message, state: FSMContext) -> None:
-    user = msg.from_user
-    existing = await db.get_user_by_tg(user.id)
-    if not existing:
-        await state.set_state(Form.register_name)
-        await msg.answer(
-            "👋 Добро пожаловать!\n\nВведите ФИО, чтобы зарегистрироваться в журнале очередей."
-        )
-        return
-
-    if not existing.get("group_name"):
-        await state.update_data(full_name=existing["full_name"])
-        await state.set_state(Form.register_group)
-        await msg.answer("Укажите учебную группу, например `ИКБО-01-23`:", parse_mode="Markdown")
-        return
-
+    tg_user = msg.from_user
+    first = tg_user.first_name or ""
+    last = tg_user.last_name or ""
+    name = f"{first} {last}".strip() or tg_user.username or "Пользователь"
+    user = await db.ensure_user(tg_user.id, tg_user.username, name, None)
     await msg.answer(
-        f"👋 *{existing['full_name']}*, добро пожаловать!\n\n"
+        f"👋 *{user['full_name']}*, добро пожаловать!\n\n"
         f"Используйте /myqueue для проверки своей позиции в очереди.",
-        reply_markup=main_menu_kb(user.id),
+        reply_markup=main_menu_kb(tg_user.id),
         parse_mode="Markdown",
     )
 
@@ -232,34 +220,6 @@ async def cmd_myqueue(msg: Message) -> None:
     await msg.answer(
         "\n\n".join(lines),
         reply_markup=main_menu_kb(msg.from_user.id),
-        parse_mode="Markdown",
-    )
-
-
-@dp.message(Form.register_name)
-async def fsm_register_name(msg: Message, state: FSMContext) -> None:
-    name = msg.text.strip()
-    if len(name.split()) < 2:
-        await msg.answer("Введите фамилию и имя минимум из двух слов:")
-        return
-    await state.update_data(full_name=name)
-    await state.set_state(Form.register_group)
-    await msg.answer("Укажите учебную группу, например `ИКБО-01-23`:", parse_mode="Markdown")
-
-
-@dp.message(Form.register_group)
-async def fsm_register_group(msg: Message, state: FSMContext) -> None:
-    group = msg.text.strip().upper()
-    if len(group) < 3:
-        await msg.answer("Группа выглядит слишком короткой. Введите ещё раз:")
-        return
-    data = await state.get_data()
-    tg_user = msg.from_user
-    user = await db.ensure_user(tg_user.id, tg_user.username, data["full_name"], group)
-    await state.clear()
-    await msg.answer(
-        f"✅ Вы зарегистрированы как *{user['full_name']}*, группа `{user['group_name']}`.",
-        reply_markup=main_menu_kb(tg_user.id),
         parse_mode="Markdown",
     )
 
@@ -973,6 +933,33 @@ async def api_me(request: web.Request) -> web.Response:
     )
 
 
+async def api_register(request: web.Request) -> web.Response:
+    data = await request_json(request)
+    profile = await telegram_profile_from_request(request, data, required=True)
+    tg_id = int(profile["id"])
+    name = (data.get("name") or "").strip()
+    group = (data.get("group") or "").strip().upper() or None
+    if len(name.split()) < 2:
+        # use Telegram name if not provided properly
+        first = profile.get("first_name", "")
+        last = profile.get("last_name", "")
+        name = f"{first} {last}".strip() or name
+    user = await db.ensure_user(tg_id, profile.get("username"), name, group)
+    return json_response({"status": "ok", "user": user})
+
+
+async def api_schedule_month(request: web.Request) -> web.Response:
+    try:
+        year = int(request.rel_url.query["year"])
+        month = int(request.rel_url.query["month"])
+    except (KeyError, ValueError):
+        return json_response({"counts": {}})
+    user = await db_user_from_request(request)
+    group_name = user.get("group_name") if user else None
+    counts = await db.class_counts_for_month(year, month, group_name)
+    return json_response({"counts": counts})
+
+
 async def api_schedule(request: web.Request) -> web.Response:
     date_str = request.rel_url.query.get("date", "")
     try:
@@ -1169,6 +1156,8 @@ async def main() -> None:
     app["bot"] = bot
     app.router.add_get("/", serve_index)
     app.router.add_get("/api/me", api_me)
+    app.router.add_post("/api/register", api_register)
+    app.router.add_get("/api/schedule/month", api_schedule_month)
     app.router.add_get("/api/schedule", api_schedule)
     app.router.add_get("/api/queue/{class_id}", api_queue_detail)
     app.router.add_post("/api/queue/{class_id}/join", api_join)
