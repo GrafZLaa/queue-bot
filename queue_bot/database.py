@@ -607,6 +607,14 @@ async def class_counts_for_month(year: int, month: int, group_name: Optional[str
         return {row["day"]: row["cnt"] for row in await cur.fetchall()}
 
 
+async def class_exists_by_subject_dt(subject_id: int, dt: str) -> bool:
+    async with connect_db() as db:
+        cur = await db.execute(
+            "SELECT id FROM classes WHERE subject_id=? AND dt=?", (subject_id, dt)
+        )
+        return bool(await cur.fetchone())
+
+
 async def user_entries_for_queues(user_id: int, queue_ids: list[int]) -> dict[int, dict]:
     """Return {queue_id: entry} for a user across the given queue IDs."""
     if not queue_ids:

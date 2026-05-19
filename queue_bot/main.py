@@ -5,10 +5,11 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -20,7 +21,9 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
     Message,
+    ReplyKeyboardMarkup,
     WebAppInfo,
 )
 from dotenv import load_dotenv
@@ -37,6 +40,7 @@ WEB_URL = os.getenv("WEB_URL", f"http://localhost:{PORT}")
 ALLOW_UNVERIFIED_WEBAPP = os.getenv("ALLOW_UNVERIFIED_WEBAPP", "0") == "1"
 PACKAGE_DIR = Path(__file__).resolve().parent
 INDEX_HTML = PACKAGE_DIR / "index.html"
+SEMESTER_START = datetime.strptime(os.getenv("SEMESTER_START", "2026-02-09"), "%Y-%m-%d")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
@@ -168,6 +172,16 @@ def main_menu_kb(tg_id: int) -> InlineKeyboardMarkup:
     return kb(*rows)
 
 
+def main_reply_kb(tg_id: int) -> ReplyKeyboardMarkup:
+    buttons: list[list[KeyboardButton]] = [
+        [KeyboardButton(text="📅 Открыть Очереди", web_app=WebAppInfo(url=WEB_URL))],
+        [KeyboardButton(text="📋 Моя позиция"), KeyboardButton(text="❓ Помощь")],
+    ]
+    if tg_id in ADMIN_IDS:
+        buttons.append([KeyboardButton(text="⚙️ Импорт расписания")])
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, is_persistent=True)
+
+
 def is_admin_id(tg_id: int) -> bool:
     return tg_id in ADMIN_IDS
 
@@ -184,25 +198,26 @@ async def cmd_start(msg: Message, state: FSMContext) -> None:
     name = f"{first} {last}".strip() or tg_user.username or "Пользователь"
     user = await db.ensure_user(tg_user.id, tg_user.username, name, None)
     await msg.answer(
-        f"👋 *{user['full_name']}*, добро пожаловать!\n\n"
-        f"Используйте /myqueue для проверки своей позиции в очереди.",
-        reply_markup=main_menu_kb(tg_user.id),
+        f"👋 Привет, *{user['full_name']}*!\n\n"
+        "Я помогаю управлять очередями на сдачу практических работ в *РТУ МИРЭА*.\n\n"
+        "📅 Показываю расписание занятий твоей группы\n"
+        "🎫 Записываю в очередь на сдачу\n"
+        "📊 Веду рейтинг — чем лучше сдаёшь, тем выше место в очереди\n"
+        "🔔 Уведомляю, когда открывается запись\n\n"
+        "Нажми *«📅 Открыть Очереди»* внизу, чтобы начать.",
+        reply_markup=main_reply_kb(tg_user.id),
         parse_mode="Markdown",
     )
 
 
-@dp.message(Command("myqueue"))
-async def cmd_myqueue(msg: Message) -> None:
+async def _send_myqueue(msg: Message) -> None:
     user = await db.get_user_by_tg(msg.from_user.id)
     if not user:
         await msg.answer("Напишите /start для регистрации.")
         return
     entries = await db.user_active_entries(user["id"])
     if not entries:
-        await msg.answer(
-            "📭 У вас нет активных записей в очереди.\n\nОткройте журнал занятий, чтобы записаться.",
-            reply_markup=main_menu_kb(msg.from_user.id),
-        )
+        await msg.answer("📭 У вас нет активных записей в очереди.\n\nОткройте журнал занятий, чтобы записаться.")
         return
     lines = ["📋 *Ваши активные записи:*\n"]
     for entry in entries:
@@ -217,9 +232,170 @@ async def cmd_myqueue(msg: Message) -> None:
             f"📅 {start} · 🚪 {room}\n"
             f"📌 {pos_text} · {cat_text}"
         )
+    await msg.answer("\n\n".join(lines), parse_mode="Markdown")
+
+
+@dp.message(Command("myqueue"))
+@dp.message(F.text == "📋 Моя позиция")
+async def cmd_myqueue(msg: Message) -> None:
+    await _send_myqueue(msg)
+
+
+async def _help_text(msg: Message) -> None:
+    text = (
+        "❓ *Помощь*\n\n"
+        "*/start* — главное меню\n"
+        "*/myqueue* — ваши записи в очередях\n"
+        "*/help* — эта справка\n"
+    )
+    if is_admin_id(msg.from_user.id):
+        text += (
+            "\n_Только для преподавателя:_\n"
+            "`/import ИКБО-01-23` — загрузить расписание группы из МИРЭА\n"
+            "`/import ИКБО-01-23 15 17` — только недели 15–17\n\n"
+            f"Текущая неделя семестра: *{max(1, ((datetime.now() - SEMESTER_START).days // 7) + 1)}*\n"
+            f"Начало семестра: `{SEMESTER_START.strftime('%d.%m.%Y')}`"
+        )
+    await msg.answer(text, parse_mode="Markdown")
+
+
+@dp.message(Command("help"))
+@dp.message(F.text == "❓ Помощь")
+async def cmd_help(msg: Message) -> None:
+    await _help_text(msg)
+
+
+@dp.message(F.text == "⚙️ Импорт расписания")
+async def kb_import_hint(msg: Message) -> None:
+    if not is_admin_id(msg.from_user.id):
+        return
+    current_week = max(1, ((datetime.now() - SEMESTER_START).days // 7) + 1)
     await msg.answer(
-        "\n\n".join(lines),
-        reply_markup=main_menu_kb(msg.from_user.id),
+        f"Используйте команду:\n`/import ИКБО-01-23`\n\n"
+        f"Текущая неделя семестра: *{current_week}*\n"
+        f"Или откройте раздел *Сервисы* в приложении.",
+        parse_mode="Markdown",
+    )
+
+
+async def fetch_group_schedule(group_name: str) -> Optional[dict]:
+    url = f"https://timetable.mirea.ru/api/schedule/groups/{group_name}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status == 404:
+                    return None
+                resp.raise_for_status()
+                data = await resp.json(content_type=None)
+                log.debug("Schedule API response keys for %s: %s", group_name, list(data.keys()) if isinstance(data, dict) else type(data))
+                return data
+    except Exception:
+        log.exception("Failed to fetch schedule for %s", group_name)
+        return None
+
+
+async def import_schedule_to_db(group_name: str, schedule_data: dict, weeks: list[int]) -> dict:
+    imported = 0
+    skipped = 0
+    subject_cache: dict[str, int] = {}
+
+    # Collect (day_of_week, lesson) pairs from the API response
+    raw_lessons: list[tuple[int, dict]] = []
+    if isinstance(schedule_data, dict) and "schedule" in schedule_data:
+        for day_data in schedule_data.get("schedule", []):
+            dow = int(day_data.get("day", 1))
+            for lesson in day_data.get("lessons", []):
+                raw_lessons.append((dow, lesson))
+    else:
+        log.warning("Unexpected schedule format for %s: %s", group_name, list(schedule_data.keys()) if isinstance(schedule_data, dict) else type(schedule_data))
+
+    for dow, lesson in raw_lessons:
+        lesson_weeks: list[int] = lesson.get("weeks") or []
+        target_weeks = [w for w in lesson_weeks if w in weeks]
+        if not target_weeks:
+            continue
+
+        subject_title = (lesson.get("subject") or {}).get("title") or "Без названия"
+        lesson_type = lesson.get("lessonType") or "ПЗ"
+        teachers = lesson.get("teachers") or []
+        teacher_name = (teachers[0].get("name") or "").strip() or None if teachers else None
+        rooms = lesson.get("rooms") or []
+        room_name = (rooms[0].get("title") or "").strip() or None if rooms else None
+        calls = lesson.get("calls") or {}
+        time_start = calls.get("time_start") or "09:00"
+        time_end = calls.get("time_end") or "10:30"
+        try:
+            t0 = datetime.strptime(time_start, "%H:%M")
+            t1 = datetime.strptime(time_end, "%H:%M")
+            duration = max(15, int((t1 - t0).total_seconds() / 60))
+        except ValueError:
+            duration = 90
+
+        full_subject = f"{subject_title} ({lesson_type})"
+        if full_subject not in subject_cache:
+            subject_id = await db.add_subject(full_subject, group_name)
+            subject_cache[full_subject] = subject_id
+        subject_id = subject_cache[full_subject]
+
+        for week_num in target_weeks:
+            week_monday = SEMESTER_START + timedelta(weeks=week_num - 1)
+            class_date = week_monday + timedelta(days=dow - 1)
+            dt_str = f"{class_date.strftime('%Y-%m-%d')}T{time_start}:00"
+            if not await db.class_exists_by_subject_dt(subject_id, dt_str):
+                await db.add_class(subject_id, dt_str, room_name, teacher_name, duration)
+                imported += 1
+            else:
+                skipped += 1
+
+    return {"imported": imported, "skipped": skipped}
+
+
+@dp.message(Command("import"))
+async def cmd_import(msg: Message) -> None:
+    if not is_admin_id(msg.from_user.id):
+        return
+    args = msg.text.split()
+    if len(args) < 2:
+        await msg.answer(
+            "Использование:\n"
+            "`/import ИКБО-01-23` — текущая и следующие 2 недели\n"
+            "`/import ИКБО-01-23 15 17` — недели 15–17",
+            parse_mode="Markdown",
+        )
+        return
+    group_name = args[1].upper()
+    current_week = max(1, ((datetime.now() - SEMESTER_START).days // 7) + 1)
+    if len(args) == 4:
+        try:
+            wfrom, wto = int(args[2]), int(args[3])
+        except ValueError:
+            await msg.answer("Номера недель должны быть числами.")
+            return
+    elif len(args) == 3:
+        try:
+            wfrom = wto = int(args[2])
+        except ValueError:
+            await msg.answer("Номер недели должен быть числом.")
+            return
+    else:
+        wfrom = current_week
+        wto = min(18, current_week + 2)
+
+    weeks = list(range(wfrom, wto + 1))
+    progress = await msg.answer(f"⏳ Загружаю расписание группы *{group_name}*...", parse_mode="Markdown")
+    data = await fetch_group_schedule(group_name)
+    if data is None:
+        await progress.edit_text(
+            f"❌ Группа *{group_name}* не найдена или сервис расписания недоступен.",
+            parse_mode="Markdown",
+        )
+        return
+    result = await import_schedule_to_db(group_name, data, weeks)
+    await progress.edit_text(
+        f"✅ Импорт завершён — *{group_name}*\n"
+        f"Недели: {wfrom}–{wto}\n"
+        f"Создано занятий: *{result['imported']}*\n"
+        f"Пропущено (уже есть): {result['skipped']}",
         parse_mode="Markdown",
     )
 
@@ -1067,6 +1243,38 @@ async def api_leave(request: web.Request) -> web.Response:
     return json_response({"status": "ok"})
 
 
+async def api_validate_group(request: web.Request) -> web.Response:
+    group = request.rel_url.query.get("group", "").strip().upper()
+    if not group:
+        return json_response({"valid": False, "error": "Не указана группа"})
+    url = f"https://timetable.mirea.ru/api/schedule/groups/{group}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 200:
+                    return json_response({"valid": True})
+                return json_response({"valid": False, "error": "Группа не найдена в системе МИРЭА"})
+    except Exception as exc:
+        log.warning("Group validation failed for %s: %s", group, exc)
+        return json_response({"valid": None, "error": "Сервис расписания недоступен"})
+
+
+async def api_import_schedule(request: web.Request) -> web.Response:
+    data = await request_json(request)
+    await require_admin_user(request, data)
+    group = (data.get("group") or "").strip().upper()
+    if not group:
+        return json_response({"error": "Укажите группу"}, status=400)
+    wfrom = max(1, int(data.get("week_from") or 1))
+    wto = min(18, int(data.get("week_to") or 18))
+    weeks = list(range(wfrom, wto + 1))
+    schedule = await fetch_group_schedule(group)
+    if schedule is None:
+        return json_response({"error": f"Группа {group} не найдена"}, status=404)
+    result = await import_schedule_to_db(group, schedule, weeks)
+    return json_response({"status": "ok", **result})
+
+
 async def api_admin_subjects(request: web.Request) -> web.Response:
     data = await request_json(request) if request.method == "POST" else None
     await require_admin_user(request, data)
@@ -1162,6 +1370,8 @@ async def main() -> None:
     app.router.add_get("/api/queue/{class_id}", api_queue_detail)
     app.router.add_post("/api/queue/{class_id}/join", api_join)
     app.router.add_post("/api/queue/{class_id}/leave", api_leave)
+    app.router.add_get("/api/validate_group", api_validate_group)
+    app.router.add_post("/api/import/schedule", api_import_schedule)
     app.router.add_get("/api/admin/subjects", api_admin_subjects)
     app.router.add_post("/api/admin/subjects", api_admin_subjects)
     app.router.add_post("/api/admin/classes", api_admin_classes)

@@ -625,6 +625,17 @@ button:focus-visible, input:focus-visible, select:focus-visible {
           <button class="primary-button" onclick="createSubject()">Добавить</button>
         </div>
         <div class="form-panel" style="margin-top:16px">
+          <h2>Импорт расписания из МИРЭА</h2>
+          <p class="muted" style="margin:0 0 12px">Загрузить занятия из системы расписания timetable.mirea.ru</p>
+          <div class="field"><label>Группа</label><input id="import-group" placeholder="ИКБО-01-23"></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div class="field"><label>Неделя с</label><input id="import-week-from" type="number" value="1" min="1" max="18"></div>
+            <div class="field"><label>по</label><input id="import-week-to" type="number" value="18" min="1" max="18"></div>
+          </div>
+          <button class="primary-button" onclick="importSchedule()">Импортировать</button>
+          <div id="import-status" style="margin-top:8px;font-size:13px"></div>
+        </div>
+        <div class="form-panel" style="margin-top:16px">
           <h2>Новая пара</h2>
           <div class="field"><label>Предмет</label><select id="class-subject"></select></div>
           <div class="field"><label>Дата</label><input id="class-date" type="date"></div>
@@ -668,8 +679,12 @@ button:focus-visible, input:focus-visible, select:focus-visible {
     <div class="modal-head"><div><h2>Добро пожаловать!</h2><div class="muted">Заполните данные для входа</div></div></div>
     <div id="reg-body">
       <div class="field"><label>ФИО</label><input id="reg-name" placeholder="Иванов Иван Иванович"></div>
-      <div class="field"><label>Учебная группа</label><input id="reg-group" placeholder="ИКБО-01-23"></div>
-      <button class="primary-button" style="width:100%;height:40px" onclick="submitRegistration()">Войти</button>
+      <div class="field">
+        <label>Учебная группа</label>
+        <input id="reg-group" placeholder="ИКБО-01-23" oninput="onGroupInput()">
+        <div id="reg-group-hint" style="font-size:12px;margin-top:5px;min-height:16px;color:var(--muted)"></div>
+      </div>
+      <button class="primary-button" style="width:100%;height:40px" id="reg-submit-btn" onclick="submitRegistration()">Войти</button>
     </div>
   </div>
 </div>
@@ -1031,6 +1046,25 @@ function formatDateTime(value) {
   const d = new Date(value);
   return `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}.${d.getFullYear()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
+async function importSchedule() {
+  const group = (document.getElementById('import-group').value || '').trim().toUpperCase();
+  const weekFrom = parseInt(document.getElementById('import-week-from').value) || 1;
+  const weekTo = parseInt(document.getElementById('import-week-to').value) || 18;
+  const status = document.getElementById('import-status');
+  if (!group) { showToast('Введите группу'); return; }
+  status.style.color = 'var(--muted)';
+  status.textContent = '⏳ Загрузка…';
+  const result = await apiPost('/api/import/schedule', { group, week_from: weekFrom, week_to: weekTo });
+  if (result.status === 'ok') {
+    status.style.color = 'var(--green)';
+    status.textContent = `✓ Создано занятий: ${result.imported}, пропущено: ${result.skipped}`;
+    await loadAdminData();
+    await renderMonth();
+  } else {
+    status.style.color = 'var(--red)';
+    status.textContent = `✗ ${result.error || 'Ошибка'}`;
+  }
+}
 function showRegModal() {
   const name = `${TG_USER?.first_name || ''} ${TG_USER?.last_name || ''}`.trim();
   document.getElementById('reg-name').value = name;
@@ -1039,12 +1073,58 @@ function showRegModal() {
 function hideRegModal() {
   document.getElementById('reg-backdrop').style.display = 'none';
 }
+let _groupValidateTimer = null;
+function onGroupInput() {
+  const hint = document.getElementById('reg-group-hint');
+  hint.style.color = 'var(--muted)';
+  hint.textContent = '';
+  clearTimeout(_groupValidateTimer);
+  const group = document.getElementById('reg-group').value.trim().toUpperCase();
+  if (group.length < 4) return;
+  hint.textContent = '⏳ Проверка…';
+  _groupValidateTimer = setTimeout(async () => {
+    const res = await apiGet(`/api/validate_group?group=${encodeURIComponent(group)}`).catch(() => ({ valid: null }));
+    if (res.valid === true) {
+      hint.style.color = 'var(--green)';
+      hint.textContent = '✓ Группа найдена в системе МИРЭА';
+    } else if (res.valid === false) {
+      hint.style.color = 'var(--red)';
+      hint.textContent = `✗ ${res.error || 'Группа не найдена'}`;
+    } else {
+      hint.style.color = 'var(--yellow)';
+      hint.textContent = '⚠ Не удалось проверить, но можно продолжить';
+    }
+  }, 700);
+}
 async function submitRegistration() {
   const name = document.getElementById('reg-name').value.trim();
-  const group = document.getElementById('reg-group').value.trim();
+  const group = document.getElementById('reg-group').value.trim().toUpperCase();
+  const hint = document.getElementById('reg-group-hint');
   if (!name || name.split(' ').length < 2) { showToast('Введите ФИО (минимум два слова)'); return; }
   if (!group) { showToast('Введите группу'); return; }
+  const btn = document.getElementById('reg-submit-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Проверка…';
+  hint.textContent = '⏳ Проверяем группу...';
+  hint.style.color = 'var(--muted)';
+  const validation = await apiGet(`/api/validate_group?group=${encodeURIComponent(group)}`).catch(() => ({ valid: null }));
+  if (validation.valid === false) {
+    hint.style.color = 'var(--red)';
+    hint.textContent = `✗ ${validation.error || 'Группа не найдена'}`;
+    btn.disabled = false;
+    btn.textContent = 'Войти';
+    return;
+  }
+  if (validation.valid === true) {
+    hint.style.color = 'var(--green)';
+    hint.textContent = '✓ Группа подтверждена';
+  } else {
+    hint.style.color = 'var(--yellow)';
+    hint.textContent = '⚠ Сервис недоступен, продолжаем без проверки';
+  }
   const result = await apiPost('/api/register', { name, group });
+  btn.disabled = false;
+  btn.textContent = 'Войти';
   if (result.status === 'ok') {
     me.registered = true;
     me.user = result.user;
@@ -1054,6 +1134,7 @@ async function submitRegistration() {
     await renderMonth();
   } else {
     showToast(result.error || 'Ошибка регистрации');
+    hint.textContent = '';
   }
 }
 function showToast(message) {
