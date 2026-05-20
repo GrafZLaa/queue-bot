@@ -109,22 +109,20 @@ async def _columns(table: str) -> set[str]:
 
 
 async def _migrate() -> None:
-    user_columns = await _columns("users")
-    class_columns = await _columns("classes")
+    user_cols = await _columns("users")
+    class_cols = await _columns("classes")
     async with connect_db() as db:
-        if "group_name" not in user_columns:
+        if "group_name" not in user_cols:
             await db.execute("ALTER TABLE users ADD COLUMN group_name TEXT")
-        if "name_confirmed" not in user_columns:
+        if "name_confirmed" not in user_cols:
             await db.execute("ALTER TABLE users ADD COLUMN name_confirmed INTEGER DEFAULT 0")
-        if "duration_minutes" not in class_columns:
-            await db.execute(
-                "ALTER TABLE classes ADD COLUMN duration_minutes INTEGER DEFAULT 90"
-            )
-        if "class_type" not in class_columns:
+        if "duration_minutes" not in class_cols:
+            await db.execute("ALTER TABLE classes ADD COLUMN duration_minutes INTEGER DEFAULT 90")
+        if "class_type" not in class_cols:
             await db.execute("ALTER TABLE classes ADD COLUMN class_type TEXT DEFAULT 'ПР'")
-        if "opens_at" not in class_columns:
+        if "opens_at" not in class_cols:
             await db.execute("ALTER TABLE classes ADD COLUMN opens_at TEXT")
-        if "closes_at" not in class_columns:
+        if "closes_at" not in class_cols:
             await db.execute("ALTER TABLE classes ADD COLUMN closes_at TEXT")
         await db.execute(
             "UPDATE classes SET duration_minutes=? WHERE duration_minutes IS NULL",
@@ -149,10 +147,7 @@ async def ensure_user(
     group_name = _clean_group(group_name)
     async with connect_db() as db:
         await db.execute(
-            """
-            INSERT OR IGNORE INTO users (telegram_id, username, full_name, group_name)
-            VALUES (?, ?, ?, ?)
-            """,
+            "INSERT OR IGNORE INTO users (telegram_id, username, full_name, group_name) VALUES (?, ?, ?, ?)",
             (tg_id, username, full_name, group_name),
         )
         if group_name is None:
@@ -162,11 +157,7 @@ async def ensure_user(
             )
         else:
             await db.execute(
-                """
-                UPDATE users
-                SET username=?, full_name=?, group_name=?
-                WHERE telegram_id=?
-                """,
+                "UPDATE users SET username=?, full_name=?, group_name=? WHERE telegram_id=?",
                 (username, full_name, group_name, tg_id),
             )
         await db.commit()
@@ -227,9 +218,7 @@ async def set_group(user_id: int, group_name: Optional[str]) -> None:
 
 async def set_name_confirmed(tg_id: int) -> None:
     async with connect_db() as db:
-        await db.execute(
-            "UPDATE users SET name_confirmed=1 WHERE telegram_id=?", (tg_id,)
-        )
+        await db.execute("UPDATE users SET name_confirmed=1 WHERE telegram_id=?", (tg_id,))
         await db.commit()
 
 
@@ -244,11 +233,7 @@ async def apply_rating(user_id: int, kind: str) -> None:
     ns = u["no_show"] + (1 if kind == "no_show" else 0)
     async with connect_db() as db:
         await db.execute(
-            """
-            UPDATE users
-            SET rating=?, category=?, on_time=?, late=?, no_show=?
-            WHERE id=?
-            """,
+            "UPDATE users SET rating=?, category=?, on_time=?, late=?, no_show=? WHERE id=?",
             (new_r, category(new_r), ot, la, ns, user_id),
         )
         await db.commit()
@@ -407,11 +392,7 @@ async def add_assignment(
 ) -> int:
     async with connect_db() as db:
         cur = await db.execute(
-            """
-            INSERT INTO assignments
-                (class_id, subject_id, title, description, deadline, url)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
+            "INSERT INTO assignments (class_id, subject_id, title, description, deadline, url) VALUES (?, ?, ?, ?, ?, ?)",
             (class_id, subject_id, title, description, deadline, url),
         )
         await db.commit()
@@ -500,33 +481,29 @@ async def leave_queue(qid: int, user_id: int) -> None:
 async def randomize_queue(qid: int) -> None:
     async with connect_db() as db:
         cur = await db.execute(
-            """
-            SELECT e.id, u.category
-            FROM entries e
-            JOIN users u ON e.user_id=u.id
-            WHERE e.queue_id=?
-            """,
+            "SELECT e.id, u.category FROM entries e JOIN users u ON e.user_id=u.id WHERE e.queue_id=?",
             (qid,),
         )
         rows = await cur.fetchall()
 
-    groups = {"good": [], "middle": [], "poor": []}
+    groups: dict[str, list[int]] = {"good": [], "middle": [], "poor": []}
     for row in rows:
         groups[row["category"]].append(row["id"])
-    for values in groups.values():
-        random.shuffle(values)
+    for lst in groups.values():
+        random.shuffle(lst)
 
     ordered = groups["good"] + groups["middle"] + groups["poor"]
     if not ordered:
         await set_queue_status(qid, "closed")
         return
 
-    first_cut = max(1, (len(ordered) + 2) // 3)
-    second_cut = max(first_cut, (2 * len(ordered) + 2) // 3)
+    n = len(ordered)
+    cut1 = max(1, (n + 2) // 3)
+    cut2 = max(cut1, (2 * n + 2) // 3)
 
     async with connect_db() as db:
         for pos, entry_id in enumerate(ordered, 1):
-            qcat = "good" if pos <= first_cut else ("middle" if pos <= second_cut else "poor")
+            qcat = "good" if pos <= cut1 else ("middle" if pos <= cut2 else "poor")
             await db.execute(
                 "UPDATE entries SET position=?, q_category=? WHERE id=?",
                 (pos, qcat, entry_id),
@@ -542,11 +519,7 @@ async def mark_submission(qid: int, user_id: int, kind: str) -> None:
     on_time = 1 if kind == "on_time" else 0
     async with connect_db() as db:
         await db.execute(
-            """
-            UPDATE entries
-            SET submitted=?, on_time=?
-            WHERE queue_id=? AND user_id=?
-            """,
+            "UPDATE entries SET submitted=?, on_time=? WHERE queue_id=? AND user_id=?",
             (submitted, on_time, qid, user_id),
         )
         await db.commit()
@@ -625,7 +598,6 @@ async def class_counts_for_month(year: int, month: int, group_name: Optional[str
 
 
 async def get_classes_to_auto_open(now_iso: str) -> list[dict]:
-    """Return classes with pending queues whose opens_at time has passed."""
     async with connect_db() as db:
         cur = await db.execute(
             """
@@ -641,7 +613,6 @@ async def get_classes_to_auto_open(now_iso: str) -> list[dict]:
 
 
 async def get_classes_to_auto_close(now_iso: str) -> list[dict]:
-    """Return classes with open queues whose closes_at time has passed."""
     async with connect_db() as db:
         cur = await db.execute(
             """
@@ -676,78 +647,101 @@ async def class_exists_by_subject_dt(subject_id: int, dt: str) -> bool:
         return bool(await cur.fetchone())
 
 
-# ─── ИКБО-42-24 schedule seed ────────────────────────────────────────────────
+# ─── ИКБО-42-24 schedule ─────────────────────────────────────────────────────
 
 _SEED_GROUP = "ИКБО-42-24"
 
-# class_type: ПР = practical (has queue), ЛК = lecture (no queue), ФК = physical ed (no queue)
+# Source: Google Calendar (ИКБО-42-24)
+# class_type: ПР = семинар/практика (has queue), ЛК = лекция (no queue), ФК = физра (no queue)
 # (subject_name, date YYYY-MM-DD, time_start HH:MM, time_end HH:MM, room, teacher, class_type)
 _RAW_CLASSES: list[tuple] = [
-    # ══════════════════════ Week 15 ══════════════════════
-    # Wednesday 20.05.2026
-    ("Иностранный язык",                              "2026-05-20", "12:40", "14:10", "И-313",   "Ослякова И. В.",      "ПР"),
-    ("Теория принятия решений",                       "2026-05-20", "14:20", "15:50", "Г-110-а", "Железняк Л. М.",      "ПР"),
-    ("Теория вероятностей и мат. статистика",         "2026-05-20", "16:20", "17:50", "А-10",    "Козлова О. Ю.",       "ЛК"),
-    # Thursday 21.05.2026
-    ("Анализ и концептуальное моделирование систем",  "2026-05-21", "09:00", "10:30", "И-212-г", "Трушин С. М.",        "ПР"),
-    ("Многоагентное моделирование",                   "2026-05-21", "10:40", "12:10", "Г-110-б", "Гололобов А. А.",     "ПР"),
-    ("Технология разработки программных приложений",  "2026-05-21", "12:40", "14:10", "И-203-б", "Золотухин С. А.",     "ПР"),
-    ("Физическая культура и спорт",                   "2026-05-21", "14:20", "15:50", "ФОК-9",   None,                  "ФК"),
-    ("Программирование на языке Питон",               "2026-05-21", "16:20", "17:50", "А-2",     "Горчаков А. В.",      "ЛК"),
-    # Friday 22.05.2026
-    ("Программирование на языке Питон",               "2026-05-22", "09:00", "10:30", "А-424-2", "Бурдин А. М.",        "ПР"),
-    ("Программирование на языке Питон",               "2026-05-22", "10:40", "12:10", "А-424-2", "Бурдин А. М.",        "ПР"),
-    ("Проектирование баз данных",                     "2026-05-22", "12:40", "14:10", "А-11",    "Семыкина Н. А.",      "ЛК"),
-    # Saturday 23.05.2026
-    ("Теория вероятностей и мат. статистика",         "2026-05-23", "09:00", "10:30", "А-403",   "Осадченко А. В.",     "ПР"),
-    ("Теория вероятностей и мат. статистика",         "2026-05-23", "10:40", "12:10", "А-403",   "Осадченко А. В.",     "ПР"),
-    # ══════════════════════ Week 16 ══════════════════════
-    # Monday 25.05.2026
-    ("Философия",                                     "2026-05-25", "16:20", "17:50", "А-63",    "Никитина Е. А.",      "ЛК"),
-    ("Социальная психология и педагогика",            "2026-05-25", "18:00", "19:30", "А-63",    "Талалуева Т. А.",     "ЛК"),
-    # Tuesday 26.05.2026
-    ("Теория принятия решений",                       "2026-05-26", "09:00", "10:30", "Г-112",   "Сорокин А. Б.",       "ЛК"),
-    ("Проектирование баз данных",                     "2026-05-26", "10:40", "12:10", "И-212-а", "Копылова Я. А.",      "ПР"),
-    # Wednesday 27.05.2026
-    ("Иностранный язык",                              "2026-05-27", "12:40", "14:10", "И-313",   "Ослякова И. В.",      "ПР"),
-    ("Теория принятия решений",                       "2026-05-27", "14:20", "15:50", "Г-110-а", "Железняк Л. М.",      "ПР"),
-    ("Анализ и концептуальное моделирование систем",  "2026-05-27", "16:20", "17:50", "А-10",    "Ахмедова Х. Г.",      "ЛК"),
-    # Thursday 28.05.2026
-    ("Анализ и концептуальное моделирование систем",  "2026-05-28", "09:00", "10:30", "И-212-г", "Трушин С. М.",        "ПР"),
-    ("Многоагентное моделирование",                   "2026-05-28", "10:40", "12:10", "Г-110-б", "Гололобов А. А.",     "ПР"),
-    ("Технология разработки программных приложений",  "2026-05-28", "12:40", "14:10", "И-203-б", "Золотухин С. А.",     "ПР"),
-    ("Физическая культура и спорт",                   "2026-05-28", "14:20", "15:50", "ФОК-9",   None,                  "ФК"),
-    # Friday 29.05.2026
-    ("Программирование на языке Питон",               "2026-05-29", "09:00", "10:30", "А-424-2", "Бурдин А. М.",        "ПР"),
-    ("Программирование на языке Питон",               "2026-05-29", "10:40", "12:10", "А-424-2", "Бурдин А. М.",        "ПР"),
-    ("Технология разработки программных приложений",  "2026-05-29", "12:40", "14:10", "А-11",    "Жматов Д. В.",        "ЛК"),
-    # Saturday 30.05.2026
-    ("Теория вероятностей и мат. статистика",         "2026-05-30", "09:00", "10:30", "А-403",   "Осадченко А. В.",     "ПР"),
-    ("Теория вероятностей и мат. статистика",         "2026-05-30", "10:40", "12:10", "А-403",   "Осадченко А. В.",     "ПР"),
-    # ══════════════════════ Week 17 ══════════════════════
-    # Monday 01.06.2026
-    ("Социальная психология и педагогика",            "2026-06-01", "09:00", "10:30", "Б-403",   "Жемерикина Ю. И.",   "ПР"),
-    ("Философия",                                     "2026-06-01", "10:40", "12:10", "Б-402",   "Девайкин И. А.",     "ПР"),
-    # Tuesday 02.06.2026
-    ("Социальная психология и педагогика",            "2026-06-02", "09:00", "10:30", "Б-403",   "Жемерикина Ю. И.",   "ПР"),
-    ("Философия",                                     "2026-06-02", "10:40", "12:10", "Б-402",   "Девайкин И. А.",     "ПР"),
-    # Wednesday 03.06.2026
-    ("Программирование на языке Питон",               "2026-06-03", "09:00", "10:30", "А-424-2", "Бурдин А. М.",        "ПР"),
-    ("Программирование на языке Питон",               "2026-06-03", "10:40", "12:10", "А-424-2", "Бурдин А. М.",        "ПР"),
-    ("Технология разработки программных приложений",  "2026-06-03", "12:40", "14:10", "А-11",    "Жматов Д. В.",        "ЛК"),
-    # Thursday 04.06.2026
-    ("Теория вероятностей и мат. статистика",         "2026-06-04", "09:00", "10:30", "А-403",   "Осадченко А. В.",     "ПР"),
-    ("Теория вероятностей и мат. статистика",         "2026-06-04", "10:40", "12:10", "А-403",   "Осадченко А. В.",     "ПР"),
+    # ══════ Неделя 15 (18–23 мая) ══════
+
+    # Понедельник 18.05
+    ("Социальная психология и педагогика",           "2026-05-18", "09:00", "10:30", "Б-403",   "Жемерикина Ю. И.",  "ПР"),
+    ("Философия",                                    "2026-05-18", "10:40", "12:10", "Б-402",   "Девайкин И. А.",    "ПР"),
+
+    # Вторник 19.05
+    ("Многоагентное моделирование",                  "2026-05-19", "09:00", "10:30", "Г-112",   "Гололобов А. А.",   "ЛК"),
+    ("Проектирование баз данных",                    "2026-05-19", "10:40", "12:10", "И-212-а", "Копылова Я. А.",    "ПР"),
+
+    # Среда 20.05
+    ("Иностранный язык",                             "2026-05-20", "12:40", "14:10", "И-342",   "Ослякова И. В.",    "ПР"),
+    ("Теория принятия решений",                      "2026-05-20", "14:20", "15:50", "Г-110-а", "Железняк Л. М.",   "ПР"),
+    ("Теория вероятностей и мат. статистика",        "2026-05-20", "16:20", "17:50", "А-10",    "Козлова О. Ю.",     "ЛК"),
+
+    # Четверг 21.05
+    ("Анализ и концептуальное моделирование систем", "2026-05-21", "09:00", "10:30", "И-212-г", "Трушин С. М.",      "ПР"),
+    ("Многоагентное моделирование",                  "2026-05-21", "10:40", "12:10", "Г-110-б", "Гололобов А. А.",   "ПР"),
+    ("Технология разработки программных приложений", "2026-05-21", "12:40", "14:10", "И-203-б", "Золотухин С. А.",   "ПР"),
+    ("Физическая культура и спорт",                  "2026-05-21", "14:35", "15:35", "ФОК-9",   None,                "ФК"),
+    ("Программирование на языке Python",             "2026-05-21", "16:20", "17:50", "А-2",     "Горчаков А. В.",    "ЛК"),
+
+    # Пятница 22.05
+    ("Программирование на языке Python",             "2026-05-22", "09:00", "10:30", "А-424-2", "Бурдин А. М.",      "ПР"),
+    ("Программирование на языке Python",             "2026-05-22", "10:40", "12:10", "А-424-2", "Бурдин А. М.",      "ПР"),
+    ("Проектирование баз данных",                    "2026-05-22", "12:40", "14:10", "А-11",    "Семыкина Н. А.",    "ЛК"),
+
+    # Суббота 23.05
+    ("Теория вероятностей и мат. статистика",        "2026-05-23", "09:00", "10:30", "А-403",   "Осадченко А. В.",   "ПР"),
+    ("Теория вероятностей и мат. статистика",        "2026-05-23", "10:40", "12:10", "А-403",   "Осадченко А. В.",   "ПР"),
+
+    # ══════ Неделя 16 (25–30 мая) ══════
+
+    # Понедельник 25.05
+    ("Философия",                                    "2026-05-25", "16:20", "17:50", "А-63МП",  "Никитина Е. А.",    "ЛК"),
+    ("Социальная психология и педагогика",           "2026-05-25", "18:00", "19:30", "А-63МП",  "Талалуева Т. А.",   "ЛК"),
+
+    # Вторник 26.05
+    ("Теория принятия решений",                      "2026-05-26", "09:00", "10:30", "Г-112",   "Сорокин А. Б.",     "ЛК"),
+    ("Проектирование баз данных",                    "2026-05-26", "10:40", "12:10", "И-212-а", "Копылова Я. А.",    "ПР"),
+
+    # Среда 27.05
+    ("Иностранный язык",                             "2026-05-27", "12:40", "14:10", "И-342",   "Ослякова И. В.",    "ПР"),
+    ("Теория принятия решений",                      "2026-05-27", "14:20", "15:50", "Г-110-а", "Железняк Л. М.",   "ПР"),
+    ("Анализ и концептуальное моделирование систем", "2026-05-27", "16:20", "17:50", "А-10",    "Ахмедова Х. Г.",    "ЛК"),
+
+    # Четверг 28.05
+    ("Анализ и концептуальное моделирование систем", "2026-05-28", "09:00", "10:30", "И-212-г", "Трушин С. М.",      "ПР"),
+    ("Многоагентное моделирование",                  "2026-05-28", "10:40", "12:10", "Г-110-б", "Гололобов А. А.",   "ПР"),
+    ("Технология разработки программных приложений", "2026-05-28", "12:40", "14:10", "И-203-б", "Золотухин С. А.",   "ПР"),
+    ("Физическая культура и спорт",                  "2026-05-28", "14:35", "15:35", "ФОК-9",   None,                "ФК"),
+
+    # Пятница 29.05
+    ("Программирование на языке Python",             "2026-05-29", "09:00", "10:30", "А-424-2", "Бурдин А. М.",      "ПР"),
+    ("Программирование на языке Python",             "2026-05-29", "10:40", "12:10", "А-424-2", "Бурдин А. М.",      "ПР"),
+    ("Технология разработки программных приложений", "2026-05-29", "12:40", "14:10", "А-11",    "Жматов Д. В.",      "ЛК"),
+
+    # Суббота 30.05
+    ("Теория вероятностей и мат. статистика",        "2026-05-30", "09:00", "10:30", "А-403",   "Осадченко А. В.",   "ПР"),
+    ("Теория вероятностей и мат. статистика",        "2026-05-30", "10:40", "12:10", "А-403",   "Осадченко А. В.",   "ПР"),
+
+    # ══════ Неделя 17 (1–4 июня) ══════
+
+    # Понедельник 01.06
+    ("Социальная психология и педагогика",           "2026-06-01", "09:00", "10:30", "Б-403",   "Жемерикина Ю. И.",  "ПР"),
+    ("Философия",                                    "2026-06-01", "10:40", "12:10", "Б-402",   "Девайкин И. А.",    "ПР"),
+
+    # Вторник 02.06
+    ("Социальная психология и педагогика",           "2026-06-02", "09:00", "10:30", "Б-403",   "Жемерикина Ю. И.",  "ПР"),
+    ("Философия",                                    "2026-06-02", "10:40", "12:10", "Б-402",   "Девайкин И. А.",    "ПР"),
+
+    # Среда 03.06
+    ("Программирование на языке Python",             "2026-06-03", "09:00", "10:30", "А-424-2", "Бурдин А. М.",      "ПР"),
+    ("Программирование на языке Python",             "2026-06-03", "10:40", "12:10", "А-424-2", "Бурдин А. М.",      "ПР"),
+    ("Технология разработки программных приложений", "2026-06-03", "12:40", "14:10", "А-11",    "Жматов Д. В.",      "ЛК"),
+
+    # Четверг 04.06
+    ("Теория вероятностей и мат. статистика",        "2026-06-04", "09:00", "10:30", "А-403",   "Осадченко А. В.",   "ПР"),
+    ("Теория вероятностей и мат. статистика",        "2026-06-04", "10:40", "12:10", "А-403",   "Осадченко А. В.",   "ПР"),
 ]
 
 
 async def seed_ikbo_42_24() -> dict:
-    """Seed ИКБО-42-24 schedule from real timetable (weeks 15–17, May–June 2026)."""
     existing = await all_subjects(_SEED_GROUP)
     if existing:
         return {"status": "already_seeded", "count": len(existing)}
 
-    # Group by date, sorted by start time
     day_groups: dict[str, list[tuple]] = defaultdict(list)
     for entry in _RAW_CLASSES:
         day_groups[entry[1]].append(entry)
@@ -760,15 +754,14 @@ async def seed_ikbo_42_24() -> dict:
     for date_str in sorted(day_groups):
         prev_t_start: Optional[str] = None
         for subj_name, date, t_start, t_end, room, teacher, class_type in day_groups[date_str]:
-            dt = datetime.fromisoformat(f"{date}T{t_start}:00")
-            is_queueable = class_type == "ПР"
+            is_pr = class_type == "ПР"
 
-            if is_queueable:
+            if is_pr:
                 if prev_t_start:
                     opens_dt = datetime.fromisoformat(f"{date}T{prev_t_start}:00")
                 else:
-                    opens_dt = dt - timedelta(minutes=90)
-                closes_dt = dt - timedelta(minutes=10)
+                    opens_dt = datetime.fromisoformat(f"{date}T{t_start}:00") - timedelta(minutes=90)
+                closes_dt = datetime.fromisoformat(f"{date}T{t_start}:00") - timedelta(minutes=10)
                 opens_iso = opens_dt.isoformat()
                 closes_iso = closes_dt.isoformat()
             else:
@@ -782,15 +775,15 @@ async def seed_ikbo_42_24() -> dict:
             t0 = datetime.strptime(t_start, "%H:%M")
             t1 = datetime.strptime(t_end, "%H:%M")
             duration = int((t1 - t0).total_seconds() / 60)
-
             dt_str = f"{date}T{t_start}:00"
+
             if not await class_exists_by_subject_dt(sid, dt_str):
                 await add_class(
                     sid, dt_str, room, teacher, duration,
                     class_type=class_type,
                     opens_at=opens_iso,
                     closes_at=closes_iso,
-                    create_queue=is_queueable,
+                    create_queue=is_pr,
                 )
                 imported += 1
 
@@ -800,23 +793,20 @@ async def seed_ikbo_42_24() -> dict:
 
 
 async def reseed_ikbo_42_24() -> dict:
-    """Delete existing ИКБО-42-24 schedule and reseed with correct data."""
     async with connect_db() as db:
         await db.execute("DELETE FROM subjects WHERE group_name=?", (_SEED_GROUP,))
         await db.commit()
     return await seed_ikbo_42_24()
 
 
-_REQUIRED_SUBJECTS = {"Технология разработки программных приложений", "Многоагентное моделирование"}
-
-
 async def ensure_seed_current() -> dict:
-    """Seed on first run; auto-reseed if the schedule is outdated (wrong subjects)."""
+    """Seed on first run; reseed if schedule is outdated (missing May 18 data or wrong rooms)."""
+    # The current correct schedule starts on 2026-05-18.
+    # If that day is missing, the DB has an outdated seed — force reseed.
+    classes_may18 = await classes_for_date("2026-05-18", _SEED_GROUP)
+    if not classes_may18:
+        return await reseed_ikbo_42_24()
     subjects = await all_subjects(_SEED_GROUP)
     if not subjects:
         return await seed_ikbo_42_24()
-    existing_names = {s["name"] for s in subjects}
-    if not _REQUIRED_SUBJECTS.issubset(existing_names):
-        # Old fake data detected — replace with real schedule
-        return await reseed_ikbo_42_24()
     return {"status": "already_seeded", "count": len(subjects)}
