@@ -11,7 +11,7 @@ DB = os.getenv("DB_PATH", "queue.db")
 DEFAULT_DURATION = 90
 
 # Increment this whenever _RAW_CLASSES changes — triggers auto-reseed on next deploy
-_SCHEDULE_VERSION = 3
+_SCHEDULE_VERSION = 4
 _SEED_GROUP = "ИКБО-42-24"
 
 SCHEMA = """
@@ -718,6 +718,13 @@ async def _do_seed() -> dict:
 async def reseed_ikbo_42_24() -> dict:
     """Wipe ИКБО-42-24 schedule and insert fresh data from _RAW_CLASSES."""
     async with connect_db() as db:
+        # Explicit delete — don't rely on ON DELETE CASCADE (old SQLite schemas may lack it)
+        cur = await db.execute("SELECT id FROM subjects WHERE group_name=?", (_SEED_GROUP,))
+        ids = [r[0] for r in await cur.fetchall()]
+        if ids:
+            ph = ",".join("?" * len(ids))
+            await db.execute(f"DELETE FROM queues WHERE class_id IN (SELECT id FROM classes WHERE subject_id IN ({ph}))", ids)
+            await db.execute(f"DELETE FROM classes WHERE subject_id IN ({ph})", ids)
         await db.execute("DELETE FROM subjects WHERE group_name=?", (_SEED_GROUP,))
         await db.commit()
     result = await _do_seed()
