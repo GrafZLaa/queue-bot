@@ -805,3 +805,18 @@ async def reseed_ikbo_42_24() -> dict:
         await db.execute("DELETE FROM subjects WHERE group_name=?", (_SEED_GROUP,))
         await db.commit()
     return await seed_ikbo_42_24()
+
+
+_REQUIRED_SUBJECTS = {"Технология разработки программных приложений", "Многоагентное моделирование"}
+
+
+async def ensure_seed_current() -> dict:
+    """Seed on first run; auto-reseed if the schedule is outdated (wrong subjects)."""
+    subjects = await all_subjects(_SEED_GROUP)
+    if not subjects:
+        return await seed_ikbo_42_24()
+    existing_names = {s["name"] for s in subjects}
+    if not _REQUIRED_SUBJECTS.issubset(existing_names):
+        # Old fake data detected — replace with real schedule
+        return await reseed_ikbo_42_24()
+    return {"status": "already_seeded", "count": len(subjects)}
