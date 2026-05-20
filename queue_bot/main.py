@@ -180,8 +180,6 @@ def main_reply_kb(tg_id: int) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="📅 Открыть Очереди", web_app=WebAppInfo(url=WEB_URL))],
         [KeyboardButton(text="📋 Моя позиция"), KeyboardButton(text="❓ Помощь")],
     ]
-    if tg_id in ADMIN_IDS:
-        buttons.append([KeyboardButton(text="⚙️ Импорт расписания")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, is_persistent=True)
 
 
@@ -267,18 +265,6 @@ async def _help_text(msg: Message) -> None:
 async def cmd_help(msg: Message) -> None:
     await _help_text(msg)
 
-
-@dp.message(F.text == "⚙️ Импорт расписания")
-async def kb_import_hint(msg: Message) -> None:
-    if not is_admin_id(msg.from_user.id):
-        return
-    current_week = max(1, ((datetime.now() - SEMESTER_START).days // 7) + 1)
-    await msg.answer(
-        f"Используйте команду:\n`/import ИКБО-01-23`\n\n"
-        f"Текущая неделя семестра: *{current_week}*\n"
-        f"Или откройте раздел *Сервисы* в приложении.",
-        parse_mode="Markdown",
-    )
 
 
 async def fetch_current_week() -> Optional[int]:
@@ -435,15 +421,12 @@ async def cmd_reseed(msg: Message) -> None:
 
 
 async def auto_open_queues_task(bot: Bot) -> None:
-    """Background task: auto-open queues 90 minutes before each class."""
+    """Auto-open queues at their opens_at time (previous class start or 90 min before)."""
     while True:
         await asyncio.sleep(60)
         try:
-            now = datetime.now()
-            from_iso = (now - timedelta(minutes=5)).isoformat()
-            until_iso = (now + timedelta(minutes=90)).isoformat()
-            classes = await db.get_classes_to_auto_open(from_iso, until_iso)
-            for row in classes:
+            now_iso = datetime.now().isoformat()
+            for row in await db.get_classes_to_auto_open(now_iso):
                 queue = await db.queue_for_class(row["id"])
                 if queue and queue["status"] == "pending":
                     await db.set_queue_status(queue["id"], "open")
@@ -451,6 +434,37 @@ async def auto_open_queues_task(bot: Bot) -> None:
                     log.info("Auto-opened queue for class_id=%s", row["id"])
         except Exception:
             log.exception("Error in auto_open_queues_task")
+
+
+async def auto_close_queues_task(bot: Bot) -> None:
+    """Auto-close and randomize queues 10 minutes before each class."""
+    while True:
+        await asyncio.sleep(60)
+        try:
+            now_iso = datetime.now().isoformat()
+            for row in await db.get_classes_to_auto_close(now_iso):
+                queue = await db.queue_for_class(row["id"])
+                if queue and queue["status"] == "open":
+                    await db.randomize_queue(queue["id"])
+                    log.info("Auto-closed queue for class_id=%s", row["id"])
+                    for entry in await db.queue_entries(queue["id"]):
+                        try:
+                            pos = entry["position"] or "—"
+                            qcat = entry.get("q_category") or "middle"
+                            cls = await db.get_class(row["id"])
+                            subj = cls["subject_name"] if cls else "Занятие"
+                            await bot.send_message(
+                                entry["telegram_id"],
+                                f"🔔 *Запись закрыта!*\n\n"
+                                f"📖 {subj}\n"
+                                f"Позиция: *{pos}*\n"
+                                f"Категория: {CAT_EMOJI[qcat]} {CAT_LABEL[qcat]}",
+                                parse_mode="Markdown",
+                            )
+                        except Exception:
+                            pass
+        except Exception:
+            log.exception("Error in auto_close_queues_task")
 
 
 @dp.message(Command("import"))
@@ -1200,13 +1214,13 @@ def class_payload(
         "group_name": cls.get("group_name") or "",
         "teacher": cls.get("teacher") or "",
         "room": cls.get("room") or "",
-        "type": "ПР",
+        "type": cls.get("class_type", "ПР"),
         "date": datetime.fromisoformat(cls["dt"]).strftime("%Y-%m-%d"),
         "time_start": start,
         "time_end": end,
         "duration_minutes": cls.get("duration_minutes") or db.DEFAULT_DURATION_MINUTES,
         "queue_id": queue["id"] if queue else None,
-        "queue_status": queue["status"] if queue else "pending",
+        "queue_status": queue["status"] if queue else "no_queue",
         "queue_count": len(entries),
         "user_in_queue": user_entry is not None,
         "user_position": user_entry["position"] if user_entry and user_entry.get("position") else None,
@@ -1546,6 +1560,7 @@ async def main() -> None:
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     log.info("Server running on port %s", PORT)
     asyncio.create_task(auto_open_queues_task(bot))
+    asyncio.create_task(auto_close_queues_task(bot))
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 

@@ -1,6 +1,7 @@
 import contextlib
 import os
 import random
+from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -35,6 +36,9 @@ CREATE TABLE IF NOT EXISTS classes (
     duration_minutes INTEGER DEFAULT 90,
     room             TEXT,
     teacher          TEXT,
+    class_type       TEXT DEFAULT 'ПР',
+    opens_at         TEXT,
+    closes_at        TEXT,
     FOREIGN KEY (subject_id) REFERENCES subjects(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS assignments (
@@ -71,7 +75,6 @@ CREATE TABLE IF NOT EXISTS entries (
 
 @contextlib.asynccontextmanager
 async def connect_db():
-    """Async context manager yielding a SQLite connection with row dicts and FK support."""
     async with aiosqlite.connect(DB) as conn:
         conn.row_factory = aiosqlite.Row
         await conn.execute("PRAGMA foreign_keys = ON")
@@ -86,7 +89,6 @@ def _clean_group(group_name: Optional[str]) -> Optional[str]:
 
 
 def category(rating: int) -> str:
-    """Return a queue category by rating."""
     if rating >= 65:
         return "good"
     if rating <= 35:
@@ -95,7 +97,6 @@ def category(rating: int) -> str:
 
 
 def class_end_time(dt: str, duration_minutes: Optional[int] = None) -> datetime:
-    """Return the calculated class end datetime."""
     start = datetime.fromisoformat(dt)
     minutes = duration_minutes or DEFAULT_DURATION_MINUTES
     return start + timedelta(minutes=minutes)
@@ -108,7 +109,6 @@ async def _columns(table: str) -> set[str]:
 
 
 async def _migrate() -> None:
-    """Apply lightweight migrations for databases created by older versions."""
     user_columns = await _columns("users")
     class_columns = await _columns("classes")
     async with connect_db() as db:
@@ -120,6 +120,12 @@ async def _migrate() -> None:
             await db.execute(
                 "ALTER TABLE classes ADD COLUMN duration_minutes INTEGER DEFAULT 90"
             )
+        if "class_type" not in class_columns:
+            await db.execute("ALTER TABLE classes ADD COLUMN class_type TEXT DEFAULT 'ПР'")
+        if "opens_at" not in class_columns:
+            await db.execute("ALTER TABLE classes ADD COLUMN opens_at TEXT")
+        if "closes_at" not in class_columns:
+            await db.execute("ALTER TABLE classes ADD COLUMN closes_at TEXT")
         await db.execute(
             "UPDATE classes SET duration_minutes=? WHERE duration_minutes IS NULL",
             (DEFAULT_DURATION_MINUTES,),
@@ -128,7 +134,6 @@ async def _migrate() -> None:
 
 
 async def init() -> None:
-    """Initialize the SQLite database and apply schema migrations."""
     async with connect_db() as db:
         await db.executescript(SCHEMA)
         await db.commit()
@@ -141,7 +146,6 @@ async def ensure_user(
     full_name: str,
     group_name: Optional[str] = None,
 ) -> dict:
-    """Create or update a Telegram user profile."""
     group_name = _clean_group(group_name)
     async with connect_db() as db:
         await db.execute(
@@ -229,21 +233,6 @@ async def set_name_confirmed(tg_id: int) -> None:
         await db.commit()
 
 
-async def get_classes_to_auto_open(from_iso: str, until_iso: str) -> list[dict]:
-    """Return classes whose pending queues should be opened (class starts within window)."""
-    async with connect_db() as db:
-        cur = await db.execute(
-            """
-            SELECT c.id FROM classes c
-            JOIN queues q ON q.class_id = c.id
-            WHERE q.status = 'pending'
-              AND c.dt BETWEEN ? AND ?
-            """,
-            (from_iso, until_iso),
-        )
-        return [dict(r) for r in await cur.fetchall()]
-
-
 async def apply_rating(user_id: int, kind: str) -> None:
     delta = {"on_time": 10, "late": 2, "no_show": -10}[kind]
     u = await get_user(user_id)
@@ -314,7 +303,6 @@ async def classes_for_subject(sid: int) -> list[dict]:
 
 
 async def classes_for_date(date_iso: str, group_name: Optional[str] = None) -> list[dict]:
-    """Return classes for a date, filtered by the student's group when provided."""
     date_prefix = f"{date_iso}%"
     group_name = _clean_group(group_name)
     async with connect_db() as db:
@@ -362,21 +350,27 @@ async def get_class(cid: int) -> Optional[dict]:
 async def add_class(
     subject_id: int,
     dt: str,
-    room: str,
-    teacher: str,
+    room: Optional[str],
+    teacher: Optional[str],
     duration_minutes: int = DEFAULT_DURATION_MINUTES,
+    class_type: str = "ПР",
+    opens_at: Optional[str] = None,
+    closes_at: Optional[str] = None,
+    create_queue: bool = True,
 ) -> int:
     duration_minutes = max(15, min(360, int(duration_minutes or DEFAULT_DURATION_MINUTES)))
     async with connect_db() as db:
         cur = await db.execute(
             """
-            INSERT INTO classes (subject_id, dt, duration_minutes, room, teacher)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO classes
+                (subject_id, dt, duration_minutes, room, teacher, class_type, opens_at, closes_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (subject_id, dt, duration_minutes, room, teacher),
+            (subject_id, dt, duration_minutes, room, teacher, class_type, opens_at, closes_at),
         )
         cid = cur.lastrowid
-        await db.execute("INSERT INTO queues (class_id) VALUES (?)", (cid,))
+        if create_queue:
+            await db.execute("INSERT INTO queues (class_id) VALUES (?)", (cid,))
         await db.commit()
         return cid
 
@@ -442,7 +436,7 @@ async def get_queue(qid: int) -> Optional[dict]:
         cur = await db.execute(
             """
             SELECT q.*, c.dt, c.duration_minutes, c.room, c.subject_id,
-                   s.name AS subject_name, s.group_name
+                   c.class_type, s.name AS subject_name, s.group_name
             FROM queues q
             JOIN classes c ON q.class_id=c.id
             JOIN subjects s ON c.subject_id=s.id
@@ -504,7 +498,6 @@ async def leave_queue(qid: int, user_id: int) -> None:
 
 
 async def randomize_queue(qid: int) -> None:
-    """Close a queue and assign positions by rating group, randomized inside groups."""
     async with connect_db() as db:
         cur = await db.execute(
             """
@@ -561,7 +554,6 @@ async def mark_submission(qid: int, user_id: int, kind: str) -> None:
 
 
 async def carry_queue(qid: int, next_class_id: int) -> int:
-    """Move users without successful submission to the next class queue."""
     async with connect_db() as db:
         nq_cur = await db.execute("SELECT id FROM queues WHERE class_id=?", (next_class_id,))
         nq = await nq_cur.fetchone()
@@ -585,7 +577,6 @@ async def carry_queue(qid: int, next_class_id: int) -> int:
 
 
 async def user_active_entries(user_id: int) -> list[dict]:
-    """Return queue entries for a user in open or closed queues, ordered by class datetime."""
     async with connect_db() as db:
         cur = await db.execute(
             """
@@ -633,84 +624,48 @@ async def class_counts_for_month(year: int, month: int, group_name: Optional[str
         return {row["day"]: row["cnt"] for row in await cur.fetchall()}
 
 
-_SEED_GROUP = "ИКБО-42-24"
-
-# (subject_name, time_start, time_end, room, teacher, [dates YYYY-MM-DD])
-_SEED_CLASSES: list[tuple[str, str, str, str, str, list[str]]] = [
-    # ── Понедельник (2 пары) ─────────────────────────────────────────
-    ("ТРПП (лек)",                      "12:40", "14:10", "А-300",    "Разумов А.С.",
-     ["2026-05-18", "2026-05-25", "2026-06-01", "2026-06-08"]),
-    ("Криптография и ЗИ (лек)",         "16:20", "17:50", "В-209",    "Морозов Д.Н.",
-     ["2026-05-18", "2026-05-25", "2026-06-01", "2026-06-08"]),
-    # ── Вторник (3 пары) ─────────────────────────────────────────────
-    ("Многоагентное моделирование (лек)","09:00", "10:30", "Г-112",    "Павлова Е.А.",
-     ["2026-05-19", "2026-05-26", "2026-06-02", "2026-06-09"]),
-    ("Проектирование баз данных (пр)",  "10:40", "12:10", "И-212-а",  "Копылова Я.А.",
-     ["2026-05-19", "2026-05-26", "2026-06-02", "2026-06-09"]),
-    ("ТРПП (пр)",                       "14:20", "15:50", "А-301",    "Разумов А.С.",
-     ["2026-05-19", "2026-05-26", "2026-06-02", "2026-06-09"]),
-    # ── Среда (3 пары) ───────────────────────────────────────────────
-    ("Проектирование баз данных (лек)", "09:00", "10:30", "А-405",    "Копылова Я.А.",
-     ["2026-05-20", "2026-05-27", "2026-06-03", "2026-06-10"]),
-    ("Иностранный язык",                "10:40", "12:10", "Г-305",    "Смирнова О.В.",
-     ["2026-05-20", "2026-05-27", "2026-06-03", "2026-06-10"]),
-    ("Многоагентное моделирование (лаб)","14:20", "15:50", "Б-120",   "Павлова Е.А.",
-     ["2026-05-20", "2026-05-27", "2026-06-03", "2026-06-10"]),
-    # ── Четверг (5 пар) ──────────────────────────────────────────────
-    ("Криптография и ЗИ (пр)",          "09:00", "10:30", "В-210",    "Морозов Д.Н.",
-     ["2026-05-21", "2026-05-28", "2026-06-04", "2026-06-11"]),
-    ("ТРПП (лаб)",                      "10:40", "12:10", "Б-402",    "Разумов А.С.",
-     ["2026-05-21", "2026-05-28", "2026-06-04", "2026-06-11"]),
-    ("Физическая культура",             "12:40", "14:10", "Спортзал", "Соколов В.П.",
-     ["2026-05-21", "2026-05-28", "2026-06-04", "2026-06-11"]),
-    ("Проектирование баз данных (лаб)", "14:20", "15:50", "И-212-б",  "Копылова Я.А.",
-     ["2026-05-21", "2026-05-28", "2026-06-04", "2026-06-11"]),
-    ("Мат. основы ЗИ (пр)",            "16:20", "17:50", "В-403",    "Петров А.В.",
-     ["2026-05-21", "2026-05-28", "2026-06-04", "2026-06-11"]),
-    # ── Пятница (3 пары) ─────────────────────────────────────────────
-    ("Многоагентное моделирование (пр)","09:00", "10:30", "Б-215",    "Павлова Е.А.",
-     ["2026-05-22", "2026-05-29", "2026-06-05", "2026-06-12"]),
-    ("Иностранный язык",                "10:40", "12:10", "Г-306",    "Смирнова О.В.",
-     ["2026-05-22", "2026-05-29", "2026-06-05", "2026-06-12"]),
-    ("Криптография и ЗИ (лаб)",        "14:20", "15:50", "В-211",    "Морозов Д.Н.",
-     ["2026-05-22", "2026-05-29", "2026-06-05", "2026-06-12"]),
-    # ── Суббота (2 пары) ─────────────────────────────────────────────
-    ("Мат. основы ЗИ (лек)",           "09:00", "10:30", "А-202",    "Петров А.В.",
-     ["2026-05-23", "2026-05-30", "2026-06-06", "2026-06-13"]),
-    ("Физическая культура",             "10:40", "12:10", "Спортзал", "Соколов В.П.",
-     ["2026-05-23", "2026-05-30", "2026-06-06", "2026-06-13"]),
-]
-
-
-async def seed_ikbo_42_24() -> dict:
-    """Seed correct schedule for ИКБО-42-24 (weeks 15–18, Spring 2026)."""
-    existing = await all_subjects(_SEED_GROUP)
-    if existing:
-        return {"status": "already_seeded", "count": len(existing)}
-
-    subject_cache: dict[str, int] = {}
-    imported = 0
-    for subj_name, t_start, t_end, room, teacher, dates in _SEED_CLASSES:
-        if subj_name not in subject_cache:
-            subject_cache[subj_name] = await add_subject(subj_name, _SEED_GROUP)
-        sid = subject_cache[subj_name]
-        t0 = datetime.strptime(t_start, "%H:%M")
-        t1 = datetime.strptime(t_end, "%H:%M")
-        duration = int((t1 - t0).total_seconds() / 60)
-        for date in dates:
-            dt_str = f"{date}T{t_start}:00"
-            if not await class_exists_by_subject_dt(sid, dt_str):
-                await add_class(sid, dt_str, room, teacher, duration)
-                imported += 1
-    return {"status": "ok", "imported": imported}
-
-
-async def reseed_ikbo_42_24() -> dict:
-    """Delete existing ИКБО-42-24 schedule and reseed with correct data."""
+async def get_classes_to_auto_open(now_iso: str) -> list[dict]:
+    """Return classes with pending queues whose opens_at time has passed."""
     async with connect_db() as db:
-        await db.execute("DELETE FROM subjects WHERE group_name=?", (_SEED_GROUP,))
-        await db.commit()
-    return await seed_ikbo_42_24()
+        cur = await db.execute(
+            """
+            SELECT c.id FROM classes c
+            JOIN queues q ON q.class_id = c.id
+            WHERE q.status = 'pending'
+              AND c.opens_at IS NOT NULL
+              AND c.opens_at <= ?
+            """,
+            (now_iso,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_classes_to_auto_close(now_iso: str) -> list[dict]:
+    """Return classes with open queues whose closes_at time has passed."""
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT c.id FROM classes c
+            JOIN queues q ON q.class_id = c.id
+            WHERE q.status = 'open'
+              AND c.closes_at IS NOT NULL
+              AND c.closes_at <= ?
+            """,
+            (now_iso,),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def user_entries_for_queues(user_id: int, queue_ids: list[int]) -> dict[int, dict]:
+    if not queue_ids:
+        return {}
+    placeholders = ",".join("?" * len(queue_ids))
+    async with connect_db() as db:
+        cur = await db.execute(
+            f"SELECT * FROM entries WHERE user_id=? AND queue_id IN ({placeholders})",
+            (user_id, *queue_ids),
+        )
+        return {row["queue_id"]: dict(row) for row in await cur.fetchall()}
 
 
 async def class_exists_by_subject_dt(subject_id: int, dt: str) -> bool:
@@ -721,14 +676,132 @@ async def class_exists_by_subject_dt(subject_id: int, dt: str) -> bool:
         return bool(await cur.fetchone())
 
 
-async def user_entries_for_queues(user_id: int, queue_ids: list[int]) -> dict[int, dict]:
-    """Return {queue_id: entry} for a user across the given queue IDs."""
-    if not queue_ids:
-        return {}
-    placeholders = ",".join("?" * len(queue_ids))
+# ─── ИКБО-42-24 schedule seed ────────────────────────────────────────────────
+
+_SEED_GROUP = "ИКБО-42-24"
+
+# class_type: ПР = practical (has queue), ЛК = lecture (no queue), ФК = physical ed (no queue)
+# (subject_name, date YYYY-MM-DD, time_start HH:MM, time_end HH:MM, room, teacher, class_type)
+_RAW_CLASSES: list[tuple] = [
+    # ══════════════════════ Week 15 ══════════════════════
+    # Wednesday 20.05.2026
+    ("Иностранный язык",                              "2026-05-20", "12:40", "14:10", "И-313",   "Ослякова И. В.",      "ПР"),
+    ("Теория принятия решений",                       "2026-05-20", "14:20", "15:50", "Г-110-а", "Железняк Л. М.",      "ПР"),
+    ("Теория вероятностей и мат. статистика",         "2026-05-20", "16:20", "17:50", "А-10",    "Козлова О. Ю.",       "ЛК"),
+    # Thursday 21.05.2026
+    ("Анализ и концептуальное моделирование систем",  "2026-05-21", "09:00", "10:30", "И-212-г", "Трушин С. М.",        "ПР"),
+    ("Многоагентное моделирование",                   "2026-05-21", "10:40", "12:10", "Г-110-б", "Гололобов А. А.",     "ПР"),
+    ("Технология разработки программных приложений",  "2026-05-21", "12:40", "14:10", "И-203-б", "Золотухин С. А.",     "ПР"),
+    ("Физическая культура и спорт",                   "2026-05-21", "14:20", "15:50", "ФОК-9",   None,                  "ФК"),
+    ("Программирование на языке Питон",               "2026-05-21", "16:20", "17:50", "А-2",     "Горчаков А. В.",      "ЛК"),
+    # Friday 22.05.2026
+    ("Программирование на языке Питон",               "2026-05-22", "09:00", "10:30", "А-424-2", "Бурдин А. М.",        "ПР"),
+    ("Программирование на языке Питон",               "2026-05-22", "10:40", "12:10", "А-424-2", "Бурдин А. М.",        "ПР"),
+    ("Проектирование баз данных",                     "2026-05-22", "12:40", "14:10", "А-11",    "Семыкина Н. А.",      "ЛК"),
+    # Saturday 23.05.2026
+    ("Теория вероятностей и мат. статистика",         "2026-05-23", "09:00", "10:30", "А-403",   "Осадченко А. В.",     "ПР"),
+    ("Теория вероятностей и мат. статистика",         "2026-05-23", "10:40", "12:10", "А-403",   "Осадченко А. В.",     "ПР"),
+    # ══════════════════════ Week 16 ══════════════════════
+    # Monday 25.05.2026
+    ("Философия",                                     "2026-05-25", "16:20", "17:50", "А-63",    "Никитина Е. А.",      "ЛК"),
+    ("Социальная психология и педагогика",            "2026-05-25", "18:00", "19:30", "А-63",    "Талалуева Т. А.",     "ЛК"),
+    # Tuesday 26.05.2026
+    ("Теория принятия решений",                       "2026-05-26", "09:00", "10:30", "Г-112",   "Сорокин А. Б.",       "ЛК"),
+    ("Проектирование баз данных",                     "2026-05-26", "10:40", "12:10", "И-212-а", "Копылова Я. А.",      "ПР"),
+    # Wednesday 27.05.2026
+    ("Иностранный язык",                              "2026-05-27", "12:40", "14:10", "И-313",   "Ослякова И. В.",      "ПР"),
+    ("Теория принятия решений",                       "2026-05-27", "14:20", "15:50", "Г-110-а", "Железняк Л. М.",      "ПР"),
+    ("Анализ и концептуальное моделирование систем",  "2026-05-27", "16:20", "17:50", "А-10",    "Ахмедова Х. Г.",      "ЛК"),
+    # Thursday 28.05.2026
+    ("Анализ и концептуальное моделирование систем",  "2026-05-28", "09:00", "10:30", "И-212-г", "Трушин С. М.",        "ПР"),
+    ("Многоагентное моделирование",                   "2026-05-28", "10:40", "12:10", "Г-110-б", "Гололобов А. А.",     "ПР"),
+    ("Технология разработки программных приложений",  "2026-05-28", "12:40", "14:10", "И-203-б", "Золотухин С. А.",     "ПР"),
+    ("Физическая культура и спорт",                   "2026-05-28", "14:20", "15:50", "ФОК-9",   None,                  "ФК"),
+    # Friday 29.05.2026
+    ("Программирование на языке Питон",               "2026-05-29", "09:00", "10:30", "А-424-2", "Бурдин А. М.",        "ПР"),
+    ("Программирование на языке Питон",               "2026-05-29", "10:40", "12:10", "А-424-2", "Бурдин А. М.",        "ПР"),
+    ("Технология разработки программных приложений",  "2026-05-29", "12:40", "14:10", "А-11",    "Жматов Д. В.",        "ЛК"),
+    # Saturday 30.05.2026
+    ("Теория вероятностей и мат. статистика",         "2026-05-30", "09:00", "10:30", "А-403",   "Осадченко А. В.",     "ПР"),
+    ("Теория вероятностей и мат. статистика",         "2026-05-30", "10:40", "12:10", "А-403",   "Осадченко А. В.",     "ПР"),
+    # ══════════════════════ Week 17 ══════════════════════
+    # Monday 01.06.2026
+    ("Социальная психология и педагогика",            "2026-06-01", "09:00", "10:30", "Б-403",   "Жемерикина Ю. И.",   "ПР"),
+    ("Философия",                                     "2026-06-01", "10:40", "12:10", "Б-402",   "Девайкин И. А.",     "ПР"),
+    # Tuesday 02.06.2026
+    ("Социальная психология и педагогика",            "2026-06-02", "09:00", "10:30", "Б-403",   "Жемерикина Ю. И.",   "ПР"),
+    ("Философия",                                     "2026-06-02", "10:40", "12:10", "Б-402",   "Девайкин И. А.",     "ПР"),
+    # Wednesday 03.06.2026
+    ("Программирование на языке Питон",               "2026-06-03", "09:00", "10:30", "А-424-2", "Бурдин А. М.",        "ПР"),
+    ("Программирование на языке Питон",               "2026-06-03", "10:40", "12:10", "А-424-2", "Бурдин А. М.",        "ПР"),
+    ("Технология разработки программных приложений",  "2026-06-03", "12:40", "14:10", "А-11",    "Жматов Д. В.",        "ЛК"),
+    # Thursday 04.06.2026
+    ("Теория вероятностей и мат. статистика",         "2026-06-04", "09:00", "10:30", "А-403",   "Осадченко А. В.",     "ПР"),
+    ("Теория вероятностей и мат. статистика",         "2026-06-04", "10:40", "12:10", "А-403",   "Осадченко А. В.",     "ПР"),
+]
+
+
+async def seed_ikbo_42_24() -> dict:
+    """Seed ИКБО-42-24 schedule from real timetable (weeks 15–17, May–June 2026)."""
+    existing = await all_subjects(_SEED_GROUP)
+    if existing:
+        return {"status": "already_seeded", "count": len(existing)}
+
+    # Group by date, sorted by start time
+    day_groups: dict[str, list[tuple]] = defaultdict(list)
+    for entry in _RAW_CLASSES:
+        day_groups[entry[1]].append(entry)
+    for d in day_groups:
+        day_groups[d].sort(key=lambda e: e[2])
+
+    subject_cache: dict[str, int] = {}
+    imported = 0
+
+    for date_str in sorted(day_groups):
+        prev_t_start: Optional[str] = None
+        for subj_name, date, t_start, t_end, room, teacher, class_type in day_groups[date_str]:
+            dt = datetime.fromisoformat(f"{date}T{t_start}:00")
+            is_queueable = class_type == "ПР"
+
+            if is_queueable:
+                if prev_t_start:
+                    opens_dt = datetime.fromisoformat(f"{date}T{prev_t_start}:00")
+                else:
+                    opens_dt = dt - timedelta(minutes=90)
+                closes_dt = dt - timedelta(minutes=10)
+                opens_iso = opens_dt.isoformat()
+                closes_iso = closes_dt.isoformat()
+            else:
+                opens_iso = None
+                closes_iso = None
+
+            if subj_name not in subject_cache:
+                subject_cache[subj_name] = await add_subject(subj_name, _SEED_GROUP)
+            sid = subject_cache[subj_name]
+
+            t0 = datetime.strptime(t_start, "%H:%M")
+            t1 = datetime.strptime(t_end, "%H:%M")
+            duration = int((t1 - t0).total_seconds() / 60)
+
+            dt_str = f"{date}T{t_start}:00"
+            if not await class_exists_by_subject_dt(sid, dt_str):
+                await add_class(
+                    sid, dt_str, room, teacher, duration,
+                    class_type=class_type,
+                    opens_at=opens_iso,
+                    closes_at=closes_iso,
+                    create_queue=is_queueable,
+                )
+                imported += 1
+
+            prev_t_start = t_start
+
+    return {"status": "ok", "imported": imported}
+
+
+async def reseed_ikbo_42_24() -> dict:
+    """Delete existing ИКБО-42-24 schedule and reseed with correct data."""
     async with connect_db() as db:
-        cur = await db.execute(
-            f"SELECT * FROM entries WHERE user_id=? AND queue_id IN ({placeholders})",
-            (user_id, *queue_ids),
-        )
-        return {row["queue_id"]: dict(row) for row in await cur.fetchall()}
+        await db.execute("DELETE FROM subjects WHERE group_name=?", (_SEED_GROUP,))
+        await db.commit()
+    return await seed_ikbo_42_24()

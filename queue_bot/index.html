@@ -811,9 +811,10 @@ async function renderClasses() {
       open: 'Запись открыта',
       closed: 'Очередь сформирована',
       completed: 'Завершено',
-    }[cls.queue_status] || cls.queue_status;
+      no_queue: '',
+    }[cls.queue_status] ?? cls.queue_status;
 
-    const canAct = me.authenticated && me.registered;
+    const canAct = me.authenticated && me.registered && me.user?.name_confirmed && cls.queue_status !== 'no_queue';
     let quickWidget = '';
     if (canAct) {
       if (cls.queue_status === 'open') {
@@ -847,7 +848,7 @@ async function renderClasses() {
           ${quickWidget}
           <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(cls.teacher || '—')}</span>
         </div>
-        <span class="queue-state ${cls.queue_status}" style="white-space:nowrap;flex-shrink:0">${statusText}${cls.queue_count ? ` · ${cls.queue_count}` : ''}</span>
+        ${statusText ? `<span class="queue-state ${cls.queue_status}" style="white-space:nowrap;flex-shrink:0">${statusText}${cls.queue_count ? ` · ${cls.queue_count}` : ''}</span>` : ''}
       </div>`;
     list.appendChild(card);
   }
@@ -896,27 +897,40 @@ async function openClass(id) {
 function renderModalBody(data) {
   const entries = data.queue?.entries || [];
   const inQueue = entries.some(entry => me.user && entry.telegram_id === me.user.telegram_id);
-  const status = data.queue?.status || 'pending';
+  const status = data.queue_status || 'no_queue';
+  const hasQueue = status !== 'no_queue';
   const assignments = data.assignments || [];
-  let action = '';
-  if (!me.authenticated) {
-    action = '<button class="plain-button" disabled>Откройте из Telegram</button>';
-  } else if (!me.registered) {
-    action = '<button class="plain-button" disabled>Напишите /start боту</button>';
-  } else if (status === 'open') {
-    action = inQueue
-      ? `<button class="danger-button" onclick="leaveQueue(${data.class_id})">Выйти из очереди</button>`
-      : `<button class="primary-button" onclick="joinQueue(${data.class_id})">Записаться</button>`;
+  let queueSection = '';
+  if (hasQueue) {
+    let action = '';
+    if (!me.authenticated) {
+      action = '<button class="plain-button" disabled>Откройте из Telegram</button>';
+    } else if (!me.registered || !me.user?.name_confirmed) {
+      action = '<button class="plain-button" disabled>Сначала укажите ваше ФИО</button>';
+    } else if (status === 'open') {
+      action = inQueue
+        ? `<button class="danger-button" onclick="leaveQueue(${data.class_id})">Выйти из очереди</button>`
+        : `<button class="primary-button" onclick="joinQueue(${data.class_id})">Записаться</button>`;
+    } else {
+      action = `<button class="plain-button" disabled>${statusLabel(status)}</button>`;
+    }
+    const adminActions = me.is_admin && data.queue?.id ? `
+      <div class="section-title">Администрирование</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="primary-button" onclick="queueAction(${data.queue.id}, 'open')">Открыть</button>
+        <button class="plain-button" onclick="queueAction(${data.queue.id}, 'close')">Сформировать</button>
+        <button class="plain-button" onclick="queueAction(${data.queue.id}, 'completed')">Завершить</button>
+      </div>` : '';
+    queueSection = `
+      <div class="section-title">Очередь</div>
+      <div class="meta"><span>Статус</span><strong>${statusLabel(status)}${entries.length ? ` · ${entries.length} чел.` : ''}</strong></div>
+      <div style="height:10px"></div>
+      ${entries.length ? entries.map(entry => renderEntry(entry, data.queue.id)).join('') : '<div class="empty">В очереди пока никого нет</div>'}
+      <div style="margin-top:14px">${action}</div>
+      ${adminActions}`;
   } else {
-    action = `<button class="plain-button" disabled>${statusLabel(status)}</button>`;
+    queueSection = `<div class="muted" style="margin-top:12px;font-size:13px">Запись в очередь для этого занятия не предусмотрена</div>`;
   }
-  const adminActions = me.is_admin && data.queue?.id ? `
-    <div class="section-title">Администрирование</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="primary-button" onclick="queueAction(${data.queue.id}, 'open')">Открыть</button>
-      <button class="plain-button" onclick="queueAction(${data.queue.id}, 'close')">Сформировать</button>
-      <button class="plain-button" onclick="queueAction(${data.queue.id}, 'completed')">Завершить</button>
-    </div>` : '';
   document.getElementById('modal-body').innerHTML = `
     <div class="meta-grid">
       <div class="meta"><span>Время</span><strong>${data.time_start} - ${data.time_end}</strong></div>
@@ -924,12 +938,7 @@ function renderModalBody(data) {
       <div class="meta"><span>Преподаватель</span><strong>${escapeHtml(data.teacher || '—')}</strong></div>
     </div>
     ${assignments.length ? `<div class="section-title">Задания</div>${assignments.map(renderAssignment).join('')}` : ''}
-    <div class="section-title">Очередь</div>
-    <div class="meta"><span>Статус</span><strong>${statusLabel(status)}${entries.length ? ` · ${entries.length} чел.` : ''}</strong></div>
-    <div style="height:10px"></div>
-    ${entries.length ? entries.map(entry => renderEntry(entry, data.queue.id)).join('') : '<div class="empty">В очереди пока никого нет</div>'}
-    <div style="margin-top:14px">${action}</div>
-    ${adminActions}`;
+    ${queueSection}`;
 }
 function renderAssignment(item) {
   return `<div class="assignment">
@@ -1034,7 +1043,13 @@ function backdropClose(event) {
   if (event.target.id === 'modal-backdrop') closeModal();
 }
 function statusLabel(status) {
-  return { pending:'Запись ещё не открыта', open:'Запись открыта', closed:'Очередь сформирована', completed:'Пара завершена' }[status] || status;
+  return {
+    pending: 'Запись ещё не открыта',
+    open: 'Запись открыта',
+    closed: 'Очередь сформирована',
+    completed: 'Пара завершена',
+    no_queue: 'Запись не предусмотрена',
+  }[status] || status;
 }
 function catLabel(cat) {
   return { good:'Добросовестный', middle:'Средний', poor:'Отстающий' }[cat] || cat;
