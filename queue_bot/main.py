@@ -420,8 +420,12 @@ async def _tg_profile(req: web.Request, body: Optional[dict] = None,
                     content_type="application/json",
                 )
             return None
-    if ALLOW_UNVERIFIED and body and body.get("user_id"):
-        return {"id": int(body["user_id"]), "first_name": body.get("name", "Dev")}
+    if ALLOW_UNVERIFIED:
+        uid = (body and body.get("user_id")) or req.rel_url.query.get("user_id")
+        if uid:
+            return {"id": int(uid), "first_name": body.get("name", "Dev") if body else "Dev"}
+        if ADMIN_IDS:
+            return {"id": ADMIN_IDS[0], "first_name": "Dev"}
     if required:
         raise web.HTTPUnauthorized(
             text=json.dumps({"error": "Требуется Telegram WebApp"}, ensure_ascii=False),
@@ -466,6 +470,8 @@ def _class_payload(cls: dict, queue: Optional[dict], entries: list,
         "queue_id":       queue["id"] if queue else None,
         "queue_status":   queue["status"] if queue else "no_queue",
         "queue_count":    len(entries),
+        "opens_at":       cls.get("opens_at"),
+        "closes_at":      cls.get("closes_at"),
         "user_in_queue":  user_entry is not None,
         "user_position":  user_entry["position"] if user_entry and user_entry.get("position") else None,
         "user_q_category": user_entry.get("q_category") if user_entry else None,

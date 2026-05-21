@@ -250,13 +250,14 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   color: #fff;
 }
 .day-count {
-  min-width: 14px;
-  height: 14px;
+  min-width: 16px;
+  height: 16px;
   border-radius: 10px;
   background: #0f4f9a;
   color: #fff;
-  font-size: 9px;
-  line-height: 14px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
   text-align: center;
   padding: 0 4px;
 }
@@ -525,22 +526,34 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   }
   .brand {
     width: 100%;
-    height: 56px;
+    height: 48px;
+  }
+  .brand-name {
+    font-size: 16px;
   }
   .tabs {
     width: 100%;
-    overflow-x: auto;
+    overflow: visible;
   }
   .tab {
-    min-width: 126px;
-    height: 48px;
+    flex: 1;
+    min-width: 0;
+    height: 44px;
+    padding: 0 6px;
+    gap: 5px;
+    font-size: 12px;
+    justify-content: center;
+  }
+  .tab-icon {
+    font-size: 14px;
   }
   .profile {
     position: absolute;
     top: 0;
     right: 0;
-    height: 56px;
+    height: 48px;
     max-width: 44%;
+    font-size: 12px;
   }
   .workspace {
     padding: 0 12px 24px;
@@ -598,7 +611,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
       <section>
         <div class="date-line">
           <strong id="selected-date">17.05.2026</strong>
-          <span class="muted" id="day-summary">Загрузка</span>
+          <span id="day-summary" style="font-size:13px;font-weight:600;background:var(--blue-soft);color:var(--blue);padding:3px 10px;border-radius:20px"></span>
         </div>
         <div class="cards" id="classes-list"></div>
       </section>
@@ -681,10 +694,23 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 <div id="toast"></div>
 
 <script>
+function _parseTgHashData() {
+  try {
+    const hash = window.location.hash.replace(/^#/, '');
+    if (!hash) return null;
+    const params = new URLSearchParams(hash);
+    const initData = params.get('tgWebAppData');
+    if (!initData) return null;
+    const dp = new URLSearchParams(initData);
+    const userStr = dp.get('user');
+    return { initData, user: userStr ? JSON.parse(userStr) : null };
+  } catch(e) { return null; }
+}
 const tg = window.Telegram?.WebApp;
 if (tg) { tg.ready(); tg.expand(); }
-const INIT_DATA = tg?.initData || '';
-const TG_USER = tg?.initDataUnsafe?.user || null;
+const _hashData = tg?.initData ? null : _parseTgHashData();
+const INIT_DATA = tg?.initData || _hashData?.initData || '';
+const TG_USER = tg?.initDataUnsafe?.user || _hashData?.user || null;
 const MONTHS = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
 const MONTHS_GEN = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
 const WEEKDAYS = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
@@ -799,20 +825,34 @@ async function renderClasses() {
   list.innerHTML = '<div class="empty">Загрузка расписания</div>';
   const data = await apiGet(`/api/schedule?date=${key}`).catch(() => ({ classes: [] }));
   const classes = data.classes || [];
-  document.getElementById('day-summary').textContent = classes.length ? `${classes.length} занятий` : 'Занятий нет';
+  const summaryEl = document.getElementById('day-summary');
+  if (classes.length) {
+    const word = classes.length === 1 ? 'пара' : classes.length < 5 ? 'пары' : 'пар';
+    summaryEl.textContent = `${classes.length} ${word}`;
+    summaryEl.style.display = '';
+  } else {
+    summaryEl.style.display = 'none';
+  }
   if (!classes.length) {
     list.innerHTML = '<div class="empty">На выбранную дату занятий нет</div>';
     return;
   }
   list.innerHTML = '';
   for (const cls of classes) {
-    const statusText = {
-      pending: 'Запись скоро',
+    let statusText = {
       open: 'Запись открыта',
       closed: 'Очередь сформирована',
       completed: 'Завершено',
       no_queue: '',
     }[cls.queue_status] ?? cls.queue_status;
+    if (cls.queue_status === 'pending') {
+      if (cls.opens_at) {
+        const t = new Date(cls.opens_at);
+        statusText = `Откроется в ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}`;
+      } else {
+        statusText = 'Запись скоро';
+      }
+    }
 
     const canAct = me.authenticated && me.registered && me.user?.name_confirmed && cls.queue_status !== 'no_queue';
     let quickWidget = '';
@@ -921,9 +961,13 @@ function renderModalBody(data) {
         <button class="plain-button" onclick="queueAction(${data.queue.id}, 'close')">Сформировать</button>
         <button class="plain-button" onclick="queueAction(${data.queue.id}, 'completed')">Завершить</button>
       </div>` : '';
+    const opensAtStr = data.opens_at ? (() => { const t = new Date(data.opens_at); return `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}`; })() : null;
+    const closesAtStr = data.closes_at ? (() => { const t = new Date(data.closes_at); return `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}`; })() : null;
     queueSection = `
       <div class="section-title">Очередь</div>
       <div class="meta"><span>Статус</span><strong>${statusLabel(status)}${entries.length ? ` · ${entries.length} чел.` : ''}</strong></div>
+      ${status === 'pending' && opensAtStr ? `<div class="meta"><span>Откроется</span><strong>в ${opensAtStr}</strong></div>` : ''}
+      ${status === 'open' && closesAtStr ? `<div class="meta"><span>Закрывается</span><strong>в ${closesAtStr}</strong></div>` : ''}
       <div style="height:10px"></div>
       ${entries.length ? entries.map(entry => renderEntry(entry, data.queue.id)).join('') : '<div class="empty">В очереди пока никого нет</div>'}
       <div style="margin-top:14px">${action}</div>
@@ -1027,14 +1071,37 @@ function renderSettings() {
     <h2>Профиль</h2>
     <div class="meta-grid">
       <div class="meta"><span>Статус</span><strong>${me.authenticated ? 'Telegram WebApp' : 'Гостевой просмотр'}</strong></div>
-      <div class="meta"><span>ФИО</span><strong>${escapeHtml(user?.full_name || 'Не зарегистрирован')}</strong></div>
       <div class="meta"><span>Группа</span><strong>${escapeHtml(user?.group_name || '—')}</strong></div>
     </div>
     <div class="meta-grid">
       <div class="meta"><span>Рейтинг</span><strong>${user ? `${user.rating}/100` : '—'}</strong></div>
       <div class="meta"><span>Вовремя</span><strong>${user?.on_time ?? '—'}</strong></div>
       <div class="meta"><span>Не сдал</span><strong>${user?.no_show ?? '—'}</strong></div>
-    </div>`;
+    </div>
+    <h2 style="margin-top:20px">Ваше ФИО</h2>
+    <div class="field">
+      <label>Фамилия Имя Отчество</label>
+      <input id="settings-name" placeholder="Иванов Иван Иванович" value="${escapeHtml(user?.full_name || '')}">
+    </div>
+    <button class="primary-button" style="margin-top:8px" onclick="saveSettingsName()">Сохранить</button>
+    <div id="settings-name-status" style="margin-top:8px;font-size:13px"></div>`;
+}
+async function saveSettingsName() {
+  const name = document.getElementById('settings-name').value.trim();
+  const status = document.getElementById('settings-name-status');
+  if (!name || name.split(' ').length < 2) { status.style.color='var(--red)'; status.textContent='Введите минимум два слова'; return; }
+  status.style.color='var(--muted)'; status.textContent='⏳ Сохранение…';
+  const result = await apiPost('/api/register', { name, user_id: TG_USER?.id });
+  if (result.status === 'ok') {
+    me.registered = true;
+    me.user = { ...result.user, name_confirmed: 1 };
+    document.getElementById('profile-name').textContent = result.user.full_name;
+    status.style.color='var(--green)'; status.textContent='✓ Сохранено';
+    hideRegModal();
+    await renderClasses();
+  } else {
+    status.style.color='var(--red)'; status.textContent = result.error || 'Ошибка';
+  }
 }
 function closeModal() {
   document.getElementById('modal-backdrop').classList.remove('visible');
@@ -1105,7 +1172,7 @@ async function submitRegistration() {
   const btn = document.getElementById('reg-submit-btn');
   btn.disabled = true;
   btn.textContent = '⏳ Вход…';
-  const result = await apiPost('/api/register', { name });
+  const result = await apiPost('/api/register', { name, user_id: TG_USER?.id });
   btn.disabled = false;
   btn.textContent = 'Войти';
   if (result.status === 'ok') {
