@@ -686,7 +686,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   <div class="modal" style="max-width:400px">
     <div class="modal-head"><div><h2>Добро пожаловать!</h2><div class="muted">Группа ИКБО-42-24 — подтвердите ваше ФИО</div></div></div>
     <div id="reg-body">
-      <div class="field"><label>ФИО</label><input id="reg-name" placeholder="Иванов Иван Иванович"></div>
+      <div class="field"><label>ФИО</label><input id="reg-name" placeholder="Иванов Иван Иванович" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="words"></div>
       <button class="primary-button" style="width:100%;height:40px" id="reg-submit-btn" onclick="submitRegistration()">Войти</button>
     </div>
   </div>
@@ -1090,7 +1090,7 @@ function renderSettings() {
     <h2 style="margin-top:20px">Ваше ФИО</h2>
     <div class="field">
       <label>Фамилия Имя Отчество</label>
-      <input id="settings-name" placeholder="Иванов Иван Иванович" value="${escapeHtml(user?.full_name || '')}">
+      <input id="settings-name" placeholder="Иванов Иван Иванович" value="${escapeHtml(user?.full_name || '')}" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="words">
     </div>
     <button class="primary-button" style="margin-top:8px" onclick="saveSettingsName()">Сохранить</button>
     <div id="settings-name-status" style="margin-top:8px;font-size:13px"></div>`;
