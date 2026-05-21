@@ -711,6 +711,12 @@ if (tg) { tg.ready(); tg.expand(); }
 const _hashData = tg?.initData ? null : _parseTgHashData();
 const INIT_DATA = tg?.initData || _hashData?.initData || '';
 const TG_USER = tg?.initDataUnsafe?.user || _hashData?.user || null;
+// Persistent device ID when Telegram SDK not available
+const DEVICE_USER_ID = (TG_USER || INIT_DATA) ? null : (() => {
+  let id = localStorage.getItem('dev_uid');
+  if (!id) { id = String(Date.now() + Math.floor(Math.random() * 1000)); localStorage.setItem('dev_uid', id); }
+  return id;
+})();
 const MONTHS = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
 const MONTHS_GEN = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
 const WEEKDAYS = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
@@ -730,14 +736,17 @@ function authHeaders() {
   return INIT_DATA ? { 'X-Telegram-Init-Data': INIT_DATA } : {};
 }
 async function apiGet(path) {
-  const r = await fetch(path, { headers: authHeaders() });
+  const sep = path.includes('?') ? '&' : '?';
+  const url = (!INIT_DATA && DEVICE_USER_ID) ? path + sep + 'user_id=' + DEVICE_USER_ID : path;
+  const r = await fetch(url, { headers: authHeaders() });
   return r.json();
 }
 async function apiPost(path, body = {}) {
+  const uid = TG_USER?.id ?? DEVICE_USER_ID;
   const r = await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ ...body, init_data: INIT_DATA }),
+    body: JSON.stringify({ ...body, init_data: INIT_DATA, ...(uid != null ? { user_id: uid } : {}) }),
   });
   return r.json();
 }
@@ -944,9 +953,9 @@ function renderModalBody(data) {
   if (hasQueue) {
     let action = '';
     if (!me.authenticated) {
-      action = '<button class="plain-button" disabled>Откройте из Telegram</button>';
+      action = '<button class="primary-button" onclick="showRegModal()">Войти / Зарегистрироваться</button>';
     } else if (!me.registered || !me.user?.name_confirmed) {
-      action = '<button class="plain-button" disabled>Сначала укажите ваше ФИО</button>';
+      action = '<button class="primary-button" onclick="showRegModal()">Укажите ваше ФИО</button>';
     } else if (status === 'open') {
       action = inQueue
         ? `<button class="danger-button" onclick="leaveQueue(${data.class_id})">Выйти из очереди</button>`
