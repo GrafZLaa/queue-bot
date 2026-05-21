@@ -547,7 +547,10 @@ async def user_active_entries(user_id: int) -> list[dict]:
             JOIN queues q ON e.queue_id=q.id
             JOIN classes c ON q.class_id=c.id
             JOIN subjects s ON c.subject_id=s.id
-            WHERE e.user_id=? AND q.status IN ('open','closed')
+            WHERE e.user_id=? AND (
+                q.status IN ('open','closed')
+                OR (q.status='completed' AND e.submitted=0)
+            )
             ORDER BY c.dt
             """,
             (user_id,),
