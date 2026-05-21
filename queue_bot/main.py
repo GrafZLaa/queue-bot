@@ -170,6 +170,11 @@ async def _auto_close_task(bot: Bot) -> None:
                     await db.randomize_queue(q["id"])
                     await _notify_close(bot, q["id"], row["id"])
                     log.info("Auto-closed queue class_id=%s", row["id"])
+            # silently complete past classes that were never opened
+            for row in await db.get_past_pending_classes(now):
+                q = await db.queue_for_class(row["id"])
+                if q and q["status"] == "pending":
+                    await db.set_queue_status(q["id"], "completed")
         except Exception:
             log.exception("auto_close error")
 

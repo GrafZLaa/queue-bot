@@ -572,7 +572,20 @@ async def get_classes_to_auto_open(now_iso: str) -> list[dict]:
         cur = await db.execute(
             """
             SELECT c.id FROM classes c JOIN queues q ON q.class_id=c.id
-            WHERE q.status='pending' AND c.opens_at IS NOT NULL AND c.opens_at <= ?
+            WHERE q.status='pending' AND c.opens_at IS NOT NULL
+              AND c.opens_at <= ? AND c.closes_at > ?
+            """,
+            (now_iso, now_iso),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_past_pending_classes(now_iso: str) -> list[dict]:
+    async with connect_db() as db:
+        cur = await db.execute(
+            """
+            SELECT c.id FROM classes c JOIN queues q ON q.class_id=c.id
+            WHERE q.status='pending' AND c.closes_at IS NOT NULL AND c.closes_at <= ?
             """,
             (now_iso,),
         )
